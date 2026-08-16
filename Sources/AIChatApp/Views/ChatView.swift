@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Main chat pane: top configuration bar, scrollable message list,
 /// streaming indicator, and multi-line input bar with image attachments.
@@ -515,7 +516,10 @@ private struct InputBarView: View {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.allowedContentTypes = [.png, .jpeg, .gif, .webp, .bmp, .tiff]
+        // Modern macOS 12+ API: build UTTypes from extensions (avoids the
+        // deprecated `allowedFileTypes`).
+        panel.allowedContentTypes = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff"]
+            .compactMap { UTType(filenameExtension: $0) }
 
         guard panel.runModal() == .OK else { return }
 

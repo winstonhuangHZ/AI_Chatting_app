@@ -147,8 +147,9 @@ final class ChatViewModel: ObservableObject {
             guard let self else { return }
 
             do {
-                // `streamChat` returns an AsyncThrowingStream<String, Error>.
-                let stream = try service.streamChat(
+                // `streamChat` is an actor method — requires `await` (Swift 6
+                // strict concurrency). It returns an AsyncThrowingStream.
+                let stream = try await service.streamChat(
                     config: configForRequest,
                     model: modelForRequest,
                     messages: history

@@ -11,9 +11,7 @@ struct SidebarView: View {
     // MARK: - Body
 
     var body: some View {
-        @Bindable var viewModel = chatViewModel
-
-        List(selection: $viewModel.activeSessionID) {
+        List(selection: $chatViewModel.activeSessionID) {
             ForEach(chatViewModel.sessions) { session in
                 SidebarRow(
                     session: session,

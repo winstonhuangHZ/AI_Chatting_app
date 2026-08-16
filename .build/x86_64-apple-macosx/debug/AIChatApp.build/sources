@@ -1,0 +1,15 @@
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Models/APIServerConfig.swift
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Models/ChatMessage.swift
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Models/ChatSession.swift
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Models/MultimodalSupport.swift
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Services/ConfigStore.swift
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Services/OpenAIService.swift
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Services/SessionStore.swift
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Services/TokenUsage.swift
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/ViewModels/AppSettingViewModel.swift
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/ViewModels/ChatViewModel.swift
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Views/AppMain.swift
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Views/ChatView.swift
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Views/ContentView.swift
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Views/SettingsView.swift
+/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Views/SidebarView.swift

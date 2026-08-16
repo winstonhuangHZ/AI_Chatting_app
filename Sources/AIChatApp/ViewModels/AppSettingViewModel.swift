@@ -77,8 +77,9 @@ final class AppSettingViewModel: ObservableObject {
     func update(_ config: APIServerConfig) {
         configStore.update(config)
         // Auto-fetch models if the profile has none cached.
+        // `fetchModels` is async — hop to a Task from this non-async method.
         if config.availableModels.isEmpty {
-            fetchModels(for: config.id)
+            Task { await fetchModels(for: config.id) }
         }
     }
 
@@ -130,7 +131,8 @@ final class AppSettingViewModel: ObservableObject {
             let (models, prices) = try await service.fetchModels(config: config)
 
             // Normalize the base URL and persist models + dynamic prices.
-            guard let normalized = try? service.normalizedBaseURL(from: config.baseURL) else {
+            // `normalizedBaseURL` is an actor method — must `await`.
+            guard let normalized = try? await service.normalizedBaseURL(from: config.baseURL) else {
                 statusMessage = "Invalid base URL."
                 statusIsError = true
                 return
