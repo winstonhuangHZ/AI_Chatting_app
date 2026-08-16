@@ -82,6 +82,18 @@ file "$BIN" | head -1
 cp "$BIN" "$STAGE/Contents/MacOS/$APP_NAME"
 cp "$BUILD_ROOT/Info.plist" "$STAGE/Contents/Info.plist"
 
+# Icon (generate if missing, then copy into Resources).
+if [ ! -f "$BUILD_ROOT/Assets/AppIcon.icns" ]; then
+  info "Generating app icon…"
+  swiftc -O "$BUILD_ROOT/scripts/generate_icon.swift" -framework AppKit -o /tmp/genicon 2>/dev/null
+  mkdir -p "$BUILD_ROOT/Assets/AppIcon.iconset"
+  /tmp/genicon /tmp/icon-1024.png 2>/dev/null || true
+  sips -z 512 512 /tmp/icon-1024.png --out "$BUILD_ROOT/Assets/AppIcon.iconset/icon_512x512@2x.png" >/dev/null 2>&1 || true
+  iconutil -c icns "$BUILD_ROOT/Assets/AppIcon.iconset" -o "$BUILD_ROOT/Assets/AppIcon.icns" 2>/dev/null || true
+fi
+cp "$BUILD_ROOT/Assets/AppIcon.icns" "$STAGE/Contents/Resources/AppIcon.icns" 2>/dev/null || \
+  warn "Icon not found; app will build without one"
+
 # Ad-hoc sign so it launches locally on both architectures.
 codesign --force --deep --sign - "$STAGE" 2>/dev/null || warn "codesign failed"
 
