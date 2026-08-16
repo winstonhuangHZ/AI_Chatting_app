@@ -188,6 +188,20 @@ private struct ProfileEditView: View {
                 TextField("Base URL", text: $draft.baseURL)
                 SecureField("API Key", text: $draft.apiKey)
 
+                Section {
+                    TextEditor(text: $draft.systemPrompt)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 100, maxHeight: 160)
+                    Label("System prompt is sent before each chat; told the model Markdown is rendered.",
+                          systemImage: "text.alignleft")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("System Prompt")
+                } footer: {
+                    Text("Edit freely — e.g. set the assistant's role/persona.")
+                }
+
                 if !isNew {
                     Section("Models") {
                         Picker("Selected Model", selection: $draft.selectedModel) {

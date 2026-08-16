@@ -132,10 +132,16 @@ final class ChatViewModel: ObservableObject {
         sessionStore.appendMessage(assistantMessage, to: sessionID)
         streamingAssistantID = assistantMessage.id
 
-        // Snapshot history — keep messages with text OR image attachments so
-        // pure-image vision requests are preserved.
-        let history = sessionStore.activeSession?.messages
+        // Build the request history: prepend the editable system prompt,
+        // then keep messages with text OR image attachments so pure-image
+        // vision requests are preserved.
+        var history = sessionStore.activeSession?.messages
             .filter { !$0.content.isEmpty || !$0.attachments.isEmpty } ?? []
+
+        let systemPrompt = config.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !systemPrompt.isEmpty {
+            history.insert(.system(systemPrompt), at: 0)
+        }
 
         isStreaming = true
 

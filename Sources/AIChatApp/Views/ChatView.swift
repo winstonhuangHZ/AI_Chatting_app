@@ -255,14 +255,26 @@ private struct MessageBubble: View {
                 }
 
                 if !contentDisplay.isEmpty {
-                    Text(contentDisplay)
-                        .font(.body)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(bubbleBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .frame(maxWidth: 620,
-                               alignment: message.role == .user ? .trailing : .leading)
+                    // Assistant replies render Markdown; user messages stay
+                    // as plain text.
+                    if message.role == .assistant {
+                        MarkdownText(text: message.content, fontSize: 13)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(bubbleBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .frame(maxWidth: 620,
+                                   alignment: message.role == .user ? .trailing : .leading)
+                    } else {
+                        Text(contentDisplay)
+                            .font(.body)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(bubbleBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .frame(maxWidth: 620,
+                                   alignment: message.role == .user ? .trailing : .leading)
+                    }
                 }
 
                 if isStreaming {

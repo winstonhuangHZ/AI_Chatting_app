@@ -51,6 +51,21 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     /// Empty when the relay does not expose `pricing`.
     var modelPrices: [String: ModelPrice]
 
+    /// Editable system prompt. Sent as the first `system` message on every
+    /// request. The default preset tells the model Markdown is rendered.
+    var systemPrompt: String
+
+    /// Multi-line text editor in settings; the default value helps the model
+    /// produce nicely formatted Markdown the app will render.
+    static let defaultSystemPrompt = """
+    You are a helpful AI assistant.
+
+    IMPORTANT: Always answer using Markdown formatting — headings, bold, \
+    italic, bullet lists, numbered lists, code blocks (with language tags), \
+    tables, and links. The user's app renders Markdown, so the better you \
+    format, the clearer your answer.
+    """
+
     // MARK: - Initializers
 
     init(
@@ -60,7 +75,8 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         apiKey: String = "",
         selectedModel: String = "",
         availableModels: [String] = [],
-        modelPrices: [String: ModelPrice] = [:]
+        modelPrices: [String: ModelPrice] = [:],
+        systemPrompt: String = APIServerConfig.defaultSystemPrompt
     ) {
         self.id = id
         self.name = name
@@ -69,6 +85,7 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         self.selectedModel = selectedModel
         self.availableModels = availableModels
         self.modelPrices = modelPrices
+        self.systemPrompt = systemPrompt
     }
 
     /// A friendly display name for UI lists.
@@ -80,8 +97,8 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
 
     // MARK: - Codable
 
-    /// Custom decoding so profiles persisted *before* dynamic pricing support
-    /// (without a `modelPrices` key) still decode correctly.
+    /// Custom decoding so profiles persisted before these fields existed
+    /// still decode correctly with sensible defaults.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -91,5 +108,7 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         selectedModel = try container.decode(String.self, forKey: .selectedModel)
         availableModels = try container.decode([String].self, forKey: .availableModels)
         modelPrices = try container.decodeIfPresent([String: ModelPrice].self, forKey: .modelPrices) ?? [:]
+        systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
+            ?? APIServerConfig.defaultSystemPrompt
     }
 }
