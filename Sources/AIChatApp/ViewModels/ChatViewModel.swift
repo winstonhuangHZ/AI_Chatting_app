@@ -104,10 +104,17 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Sending messages
 
-    /// Sends the user's text as a message and kicks off a streaming reply.
-    func sendMessage(_ text: String, config: APIServerConfig?, model: String) {
+    /// Sends the user's text (optionally with image attachments) as a message
+    /// and kicks off a streaming reply.
+    func sendMessage(
+        _ text: String,
+        config: APIServerConfig?,
+        model: String,
+        attachments: [ImageAttachment] = []
+    ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        // Allow sending when either text or at least one image is present.
+        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
         guard let sessionID = activeSessionID else { return }
         guard let config = config else {
             errorMessage = "No active API profile. Add one in Settings first."
@@ -118,17 +125,19 @@ final class ChatViewModel: ObservableObject {
         cancelStreaming()
         clearError()
 
-        // Persist the user message.
-        sessionStore.appendMessage(.user(trimmed), to: sessionID)
+        // Persist the user message (with any image attachments).
+        sessionStore.appendMessage(.user(trimmed, attachments: attachments), to: sessionID)
 
         // Append a placeholder assistant message that will fill as deltas land.
         let assistantMessage = ChatMessage.assistant()
         sessionStore.appendMessage(assistantMessage, to: sessionID)
         streamingAssistantID = assistantMessage.id
 
-        // Snapshot the message history to send (includes the just-added user message).
+        // Snapshot the message history to send (includes the just-added user
+        // message). Keep messages that have text OR image attachments — a
+        // vision request may contain an empty-caption image.
         let history = sessionStore.activeSession?.messages
-            .filter { !$0.content.isEmpty } ?? []
+            .filter { !$0.content.isEmpty || !$0.attachments.isEmpty } ?? []
 
         let configForRequest = config
         let modelForRequest = model

@@ -286,11 +286,37 @@ final class OpenAIService: NSObject, URLSessionDataDelegate {
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
 
         // Build the wire-format message payload.
-        let payloadMessages: [[String: String]] = messages.map { message in
-            [
-                "role": message.role.rawValue,
-                "content": message.content
-            ]
+        //
+        // Multimodal messages carry images as an OpenAI `content` array:
+        //   content = [
+        //     {"type":"text","text":"..."},
+        //     {"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}
+        //   ]
+        let payloadMessages: [[String: Any]] = messages.map { message -> [String: Any] in
+            var result: [String: Any] = ["role": message.role.rawValue]
+
+            if !message.attachments.isEmpty {
+                var contentParts: [[String: Any]] = []
+                if !message.content.isEmpty {
+                    contentParts.append([
+                        "type": "text",
+                        "text": message.content
+                    ])
+                }
+                for attachment in message.attachments {
+                    contentParts.append([
+                        "type": "image_url",
+                        "image_url": [
+                            "url": attachment.dataURI
+                        ]
+                    ])
+                }
+                result["content"] = contentParts
+            } else {
+                result["content"] = message.content
+            }
+
+            return result
         }
 
         let body: [String: Any] = [

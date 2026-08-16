@@ -2,10 +2,10 @@ import SwiftUI
 import AppKit
 
 /// Main chat pane: top configuration bar, scrollable message list,
-/// streaming indicator, and multi-line input bar.
+/// streaming indicator, and multi-line input bar with image attachments.
 ///
-/// Uses only macOS 10.15-compatible SwiftUI API — no SF Symbols
-/// (`Image(systemName:)`), no MenuPickerStyle, explicit `self.` in closures.
+/// Uses only macOS 10.15-compatible SwiftUI API — no SF Symbols, no `if let`
+/// inside ViewBuilders, explicit `self.` in closures (Swift 5.2 rules).
 struct ChatView: View {
 
     // MARK: - Environment
@@ -37,7 +37,14 @@ struct ChatView: View {
             Divider()
 
             InputBarView(
-                onSend: handleSend,
+                onSend: { text, attachments in
+                    self.chatViewModel.sendMessage(
+                        text,
+                        config: self.configStore.activeConfig,
+                        model: self.configStore.activeConfig?.selectedModel ?? "",
+                        attachments: attachments
+                    )
+                },
                 isStreaming: self.chatViewModel.isStreaming
             )
         }
@@ -85,16 +92,6 @@ struct ChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-
-    // MARK: - Actions
-
-    private func handleSend(_ text: String) {
-        self.chatViewModel.sendMessage(
-            text,
-            config: self.configStore.activeConfig,
-            model: self.configStore.activeConfig?.selectedModel ?? ""
-        )
-    }
 }
 
 // MARK: - Top configuration bar
@@ -125,7 +122,7 @@ private struct TopBarView: View {
             .frame(minWidth: 160)
 
             // Model picker (populated from the active profile).
-            // Computed property keeps `if` + locals out of the ViewBuilder.
+            // Multimodal models are marked with 🖼.
             if self.configStore.activeConfig != nil {
                 self.modelPicker
             }
@@ -172,16 +169,17 @@ private struct TopBarView: View {
 
     // MARK: - Helpers
 
-    /// Model picker bound to the active profile's selection.
+    /// Model picker bound to the active profile's selection. Vision-capable
+    /// models are labelled with a 🖼 prefix via `MultimodalSupport`.
     private var modelPicker: some View {
         let config = self.configStore.activeConfig!
-        return Picker("Model", selection: self.modelPickerBinding(for: config)) {
+        let selection = self.modelPickerBinding(for: config)
+        return Picker("Model", selection: selection) {
             if config.availableModels.isEmpty {
-                Text("No models — fetch in Settings")
-                    .tag("")
+                Text("No models — fetch in Settings").tag("")
             }
             ForEach(config.availableModels, id: \.self) { model in
-                Text(model).tag(model)
+                Text(MultimodalSupport.displayName(model)).tag(model)
             }
         }
         .frame(minWidth: 200)
@@ -210,8 +208,7 @@ extension Notification.Name {
 
 // MARK: - Message list
 
-/// Scrollable list of messages (ScrollViewReader is macOS 11+; we rely on
-/// the list re-rendering each streaming delta, which keeps the view pinned).
+/// Scrollable list of messages. Renders text plus any image attachments.
 private struct MessageList: View {
 
     /// Session being displayed.
@@ -244,7 +241,8 @@ private struct MessageList: View {
 
 // MARK: - Message bubble
 
-/// Renders a single chat message as a bubble with role-appropriate styling.
+/// Renders a single chat message as a bubble with role-appropriate styling
+/// and inline image previews for attachments.
 private struct MessageBubble: View {
 
     /// Message to display.
@@ -273,13 +271,20 @@ private struct MessageBubble: View {
                         .foregroundColor(.secondary)
                 }
 
-                Text(self.contentDisplay)
-                    .font(.system(size: 13))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(self.bubbleBackground)
-                    .cornerRadius(10)
-                    .frame(maxWidth: 620, alignment: self.message.role == .user ? .trailing : .leading)
+                // Image attachments preview (user messages).
+                if !self.message.attachments.isEmpty {
+                    self.attachmentGrid
+                }
+
+                if !self.contentDisplay.isEmpty {
+                    Text(self.contentDisplay)
+                        .font(.system(size: 13))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(self.bubbleBackground)
+                        .cornerRadius(10)
+                        .frame(maxWidth: 620, alignment: self.message.role == .user ? .trailing : .leading)
+                }
 
                 if self.isStreaming {
                     Text("● Generating…")
@@ -296,6 +301,19 @@ private struct MessageBubble: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: self.message.role == .user ? .trailing : .leading)
+    }
+
+    // MARK: - Attachment grid
+
+    /// Horizontal row of image thumbnails (max width 200 each).
+    private var attachmentGrid: some View {
+        HStack(spacing: 6) {
+            ForEach(self.message.attachments) { attachment in
+                AttachmentThumbnail(attachment: attachment)
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
     }
 
     // MARK: - Derived content
@@ -333,13 +351,49 @@ private struct MessageBubble: View {
     }
 }
 
+// MARK: - Attachment thumbnail
+
+/// Renders a decoded base64 image, or a placeholder when decoding fails.
+private struct AttachmentThumbnail: View {
+
+    /// Attachment to display.
+    let attachment: ImageAttachment
+
+    // MARK: - Body
+
+    @ViewBuilder var body: some View {
+        // Old ViewBuilder has no `if let` support — use if != nil + force unwrap.
+        if self.attachment.decodedData != nil && NSImage(data: self.attachment.decodedData!) != nil {
+            Image(nsImage: NSImage(data: self.attachment.decodedData!)!)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: 180, maxHeight: 140)
+                .cornerRadius(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.gray.opacity(0.4), lineWidth: 1)
+                )
+        } else {
+            Text("🖼 \(self.attachment.filename)")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .padding(6)
+                .background(Color.gray.opacity(0.15))
+                .cornerRadius(6)
+        }
+    }
+}
+
 // MARK: - Input bar
 
-/// Multi-line input using an AppKit NSTextView wrapper (TextEditor is 11+).
+/// Multi-line input with image attachment support:
+/// - NSTextView (Enter sends, Shift+Enter newline, ⌘Enter sends)
+/// - 🖼 button opens NSOpenPanel to attach images
+/// - thumbnail previews can be removed before sending
 private struct InputBarView: View {
 
-    /// Callback invoked with text to send.
-    let onSend: (String) -> Void
+    /// Callback invoked with text + attachments to send.
+    let onSend: (String, [ImageAttachment]) -> Void
 
     /// True while a stream is running (disables the send button).
     let isStreaming: Bool
@@ -347,27 +401,57 @@ private struct InputBarView: View {
     /// Draft editor state.
     @State private var draft = ""
 
+    /// Images selected but not yet sent.
+    @State private var pendingAttachments: [ImageAttachment] = []
+
     // MARK: - Body
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            MultiLineTextField(text: self.$draft, onEnter: {
-                self.onSubmit()
-            })
-            .frame(minHeight: 40, maxHeight: 100)
-
-            Button(action: {
-                self.onSubmit()
-            }) {
-                Text("Send")
-                    .font(.system(size: 13, weight: .semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
+        VStack(alignment: .leading, spacing: 4) {
+            // Attachment preview row (below the editor)
+            if !self.pendingAttachments.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(self.pendingAttachments) { attachment in
+                        PendingAttachmentChip(
+                            attachment: attachment,
+                            onRemove: {
+                                self.removeAttachment(attachment)
+                            }
+                        )
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
             }
-            .buttonStyle(BorderedButtonStyle())
-            .disabled(self.isSendDisabled)
+
+            HStack(alignment: .center, spacing: 8) {
+                // Image attach button
+                Button(action: {
+                    self.pickImages()
+                }) {
+                    Text("🖼")
+                        .font(.system(size: 14))
+                }
+                .buttonStyle(BorderlessButtonStyle())
+
+                MultiLineTextField(text: self.$draft, onEnter: {
+                    self.onSubmit()
+                })
+                .frame(minHeight: 40, maxHeight: 100)
+
+                Button(action: {
+                    self.onSubmit()
+                }) {
+                    Text("Send")
+                        .font(.system(size: 13, weight: .semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(BorderedButtonStyle())
+                .disabled(self.isSendDisabled)
+            }
+            .padding(.horizontal, 12)
         }
-        .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color(NSColor.windowBackgroundColor))
     }
@@ -375,16 +459,109 @@ private struct InputBarView: View {
     // MARK: - Derived
 
     private var isSendDisabled: Bool {
-        self.isStreaming || self.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let textEmpty = self.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return self.isStreaming || (textEmpty && self.pendingAttachments.isEmpty)
     }
 
     // MARK: - Actions
 
     private func onSubmit() {
         let text = self.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !self.isStreaming else { return }
+        // Allow send when text or images present.
+        guard text.isEmpty == false || !self.pendingAttachments.isEmpty else { return }
+        guard !self.isStreaming else { return }
+
+        let attachments = self.pendingAttachments
         self.draft = ""
-        self.onSend(text)
+        self.pendingAttachments = []
+        self.onSend(text, attachments)
+    }
+
+    private func removeAttachment(_ attachment: ImageAttachment) {
+        self.pendingAttachments.removeAll { $0.id == attachment.id }
+    }
+
+    /// Opens the native file picker (images only) and converts selections to
+    /// base64 `ImageAttachment`s (max ~8MB each to keep the request sane).
+    private func pickImages() {
+        let panel = NSOpenPanel()
+        panel.title = "Attach Image"
+        panel.prompt = "Attach"
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedFileTypes = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff"]
+
+        guard panel.runModal() == .OK else { return }
+
+        for url in panel.urls {
+            guard let data = try? Data(contentsOf: url) else { continue }
+            // Heuristic cap: skip files > 10MB (most APIs reject huge payloads).
+            if data.count > 10 * 1024 * 1024 {
+                continue
+            }
+            let mime = Self.mimeType(for: url.pathExtension)
+            let attachment = ImageAttachment(
+                filename: url.lastPathComponent,
+                mimeType: mime,
+                base64Data: data.base64EncodedString()
+            )
+            self.pendingAttachments.append(attachment)
+        }
+    }
+
+    /// Maps a file extension to a MIME type.
+    private static func mimeType(for ext: String) -> String {
+        switch ext.lowercased() {
+        case "png":  return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif":  return "image/gif"
+        case "webp": return "image/webp"
+        case "bmp":  return "image/bmp"
+        case "tiff": return "image/tiff"
+        default:     return "image/png"
+        }
+    }
+}
+
+// MARK: - Pending attachment chip
+
+/// Small thumbnail with an ✕ remove button for pending (unsent) images.
+private struct PendingAttachmentChip: View {
+
+    /// Attachment to display.
+    let attachment: ImageAttachment
+
+    /// Called when the user taps ✕ to remove this attachment.
+    let onRemove: () -> Void
+
+    // MARK: - Body
+
+    @ViewBuilder var body: some View {
+        HStack(spacing: 4) {
+            // Old ViewBuilder has no `if let` support — use if != nil + force unwrap.
+            if self.attachment.decodedData != nil && NSImage(data: self.attachment.decodedData!) != nil {
+                Image(nsImage: NSImage(data: self.attachment.decodedData!)!)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 44, height: 44)
+                    .cornerRadius(4)
+            } else {
+                Text("🖼")
+                    .font(.system(size: 18))
+                    .frame(width: 44, height: 44)
+            }
+
+            Button(action: self.onRemove) {
+                Text("✕")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(BorderlessButtonStyle())
+        }
+        .padding(3)
+        .background(Color.gray.opacity(0.12))
+        .cornerRadius(6)
     }
 }
 
@@ -471,7 +648,6 @@ private struct MultiLineTextField: NSViewRepresentable {
 // MARK: - Error banner
 
 /// Dismissible error banner shown when a stream or configuration fails.
-/// Rendered via `.overlay` in the parent (overlay(alignment:) is 12+).
 struct ErrorBannerView: View {
 
     /// Message to display.

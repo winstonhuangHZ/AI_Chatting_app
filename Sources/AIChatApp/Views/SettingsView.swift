@@ -388,15 +388,22 @@ private struct ProfileEditView: View {
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
 
-            Picker("Selected Model", selection: self.$draft.selectedModel) {
-                if self.draft.availableModels.isEmpty {
-                    Text("No models yet").tag("")
+            VStack(alignment: .leading, spacing: 4) {
+                Picker("Selected Model", selection: self.$draft.selectedModel) {
+                    if self.draft.availableModels.isEmpty {
+                        Text("No models yet").tag("")
+                    }
+                    ForEach(self.draft.availableModels, id: \.self) { model in
+                        // 🖼 marks multimodal (vision) models.
+                        Text(MultimodalSupport.displayName(model)).tag(model)
+                    }
                 }
-                ForEach(self.draft.availableModels, id: \.self) { model in
-                    Text(model).tag(model)
-                }
+                .disabled(self.draft.availableModels.isEmpty)
+
+                Text("🖼 = multimodal (vision) model")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
             }
-            .disabled(self.draft.availableModels.isEmpty)
 
             HStack {
                 Button("Fetch Models") {
