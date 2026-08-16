@@ -1,0 +1,40 @@
+name: Build DMG
+
+# 手动触发 + main 推送触发
+on:
+  workflow_dispatch:    # 可在 GitHub Actions 页面手动点击运行
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-latest    # Apple Silicon / 通用 macOS 虚拟机（含完整 Xcode）
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          ls /Applications/Xcode_*.app 2>/dev/null || ls /Applications/Xcode.app 2>/dev/null || ls /Applications/Xcode*.app 2>/dev/null
+          XCODE_VER=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1 || echo "")
+          echo "Using Xcode: $XCODE_VER"
+          if [ -n "$XCODE_VER" ] && [ -d "$XCODE_VER/Contents/Developer" ]; then
+            sudo xcode-select -s "$XCODE_VER/Contents/Developer"
+          fi
+          xcodebuild -version 2>/dev/null | head -2
+          swift --version | head -1
+
+      - name: Build Universal .app + DMG
+        run: |
+          chmod +x scripts/build_dmg.sh
+          ./scripts/build_dmg.sh
+
+      - name: Upload DMG as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AIChatApp-DMG
+          path: |
+            dist/*.dmg
+            .stage/AIChatApp.app
+          if-no-files-found: error

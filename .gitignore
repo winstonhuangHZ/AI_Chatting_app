@@ -1,5 +1,6 @@
 # SwiftPM 构建产物
 .build/
+.stage/
 
 # 应用打包产物
 dist/

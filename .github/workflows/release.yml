@@ -1,0 +1,55 @@
+name: Release DMG
+
+# 当推送 tag（如 v1.0.0）或手动触发时运行
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest    # macOS 14+ 云端主机，内置完整 Xcode（支持双架构交叉编译）
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          XCODE_VER=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1 || echo "")
+          echo "Using Xcode: $XCODE_VER"
+          if [ -n "$XCODE_VER" ] && [ -d "$XCODE_VER/Contents/Developer" ]; then
+            sudo xcode-select -s "$XCODE_VER/Contents/Developer"
+          fi
+          xcodebuild -version 2>/dev/null | head -2
+          swift --version | head -1
+
+      - name: Build Universal .app + DMG
+        run: |
+          chmod +x scripts/build_dmg.sh
+          # 从 git tag 提取版本号（如 v1.0.0 → 1.0.0）
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          VERSION="$VERSION" ./scripts/build_dmg.sh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: |
+            AI Chat 应用 — Universal (arm64 + x86_64) 安装包
+            - 由 GitHub Actions 自动化构建
+            - 支持 Apple Silicon 与 Intel Mac
+          files: |
+            dist/*.dmg
+          draft: false
+          prerelease: false
+
+      - name: Upload DMG as Artifact (备查)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AIChatApp-DMG
+          path: dist/*.dmg
+          if-no-files-found: error
