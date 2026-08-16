@@ -1,0 +1,83 @@
+{
+  "": {
+    "swift-dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/master.swiftdeps"
+  },
+  "/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Models/APIServerConfig.swift": {
+    "dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/APIServerConfig.d",
+    "object": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/APIServerConfig.swift.o",
+    "swiftmodule": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/APIServerConfig~partial.swiftmodule",
+    "swift-dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/APIServerConfig.swiftdeps"
+  },
+  "/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Models/ChatMessage.swift": {
+    "dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatMessage.d",
+    "object": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatMessage.swift.o",
+    "swiftmodule": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatMessage~partial.swiftmodule",
+    "swift-dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatMessage.swiftdeps"
+  },
+  "/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Models/ChatSession.swift": {
+    "dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatSession.d",
+    "object": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatSession.swift.o",
+    "swiftmodule": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatSession~partial.swiftmodule",
+    "swift-dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatSession.swiftdeps"
+  },
+  "/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Services/ConfigStore.swift": {
+    "dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ConfigStore.d",
+    "object": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ConfigStore.swift.o",
+    "swiftmodule": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ConfigStore~partial.swiftmodule",
+    "swift-dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ConfigStore.swiftdeps"
+  },
+  "/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Services/OpenAIService.swift": {
+    "dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/OpenAIService.d",
+    "object": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/OpenAIService.swift.o",
+    "swiftmodule": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/OpenAIService~partial.swiftmodule",
+    "swift-dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/OpenAIService.swiftdeps"
+  },
+  "/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Services/SessionStore.swift": {
+    "dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/SessionStore.d",
+    "object": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/SessionStore.swift.o",
+    "swiftmodule": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/SessionStore~partial.swiftmodule",
+    "swift-dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/SessionStore.swiftdeps"
+  },
+  "/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/ViewModels/AppSettingViewModel.swift": {
+    "dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/AppSettingViewModel.d",
+    "object": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/AppSettingViewModel.swift.o",
+    "swiftmodule": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/AppSettingViewModel~partial.swiftmodule",
+    "swift-dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/AppSettingViewModel.swiftdeps"
+  },
+  "/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/ViewModels/ChatViewModel.swift": {
+    "dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatViewModel.d",
+    "object": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatViewModel.swift.o",
+    "swiftmodule": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatViewModel~partial.swiftmodule",
+    "swift-dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatViewModel.swiftdeps"
+  },
+  "/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Views/AppMain.swift": {
+    "dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/AppMain.d",
+    "object": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/AppMain.swift.o",
+    "swiftmodule": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/AppMain~partial.swiftmodule",
+    "swift-dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/AppMain.swiftdeps"
+  },
+  "/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Views/ChatView.swift": {
+    "dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatView.d",
+    "object": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatView.swift.o",
+    "swiftmodule": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatView~partial.swiftmodule",
+    "swift-dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ChatView.swiftdeps"
+  },
+  "/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Views/ContentView.swift": {
+    "dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ContentView.d",
+    "object": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ContentView.swift.o",
+    "swiftmodule": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ContentView~partial.swiftmodule",
+    "swift-dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/ContentView.swiftdeps"
+  },
+  "/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Views/SettingsView.swift": {
+    "dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/SettingsView.d",
+    "object": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/SettingsView.swift.o",
+    "swiftmodule": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/SettingsView~partial.swiftmodule",
+    "swift-dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/SettingsView.swiftdeps"
+  },
+  "/Users/huangwenqin/Desktop/AI_Chatting_app/Sources/AIChatApp/Views/SidebarView.swift": {
+    "dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/SidebarView.d",
+    "object": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/SidebarView.swift.o",
+    "swiftmodule": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/SidebarView~partial.swiftmodule",
+    "swift-dependencies": "/Users/huangwenqin/Desktop/AI_Chatting_app/.build/x86_64-apple-macosx/debug/AIChatApp.build/SidebarView.swiftdeps"
+  }
+}

@@ -1,0 +1,124 @@
+import Foundation
+
+/// Persists chat sessions (title + full message history) using `UserDefaults`
+/// with a JSON-encoded array.
+final class SessionStore: ObservableObject {
+
+    // MARK: - Constants
+
+    /// `UserDefaults` key encoding all sessions.
+    private static let sessionsKey = "chatSessions"
+
+    /// `UserDefaults` key recording the selected session UUID string.
+    private static let activeIDKey = "activeSessionID"
+
+    // MARK: - Published state
+
+    /// All saved sessions, most-recently-created first.
+    @Published var sessions: [ChatSession] {
+        didSet { persist() }
+    }
+
+    /// The session currently open in the chat view.
+    @Published var activeSessionID: UUID? {
+        didSet {
+            UserDefaults.standard.set(
+                activeSessionID?.uuidString,
+                forKey: Self.activeIDKey
+            )
+        }
+    }
+
+    /// Convenience accessor for the active session object.
+    var activeSession: ChatSession? {
+        guard let id = activeSessionID else { return nil }
+        return sessions.first { $0.id == id }
+    }
+
+    // MARK: - Initializers
+
+    init() {
+        let defaults = UserDefaults.standard
+
+        if let data = defaults.data(forKey: Self.sessionsKey),
+           let decoded = try? JSONDecoder().decode([ChatSession].self, from: data) {
+            // Sort newest first by creation date.
+            self.sessions = decoded.sorted { $0.createdAt > $1.createdAt }
+        } else {
+            self.sessions = []
+        }
+
+        if let stored = defaults.string(forKey: Self.activeIDKey),
+           let id = UUID(uuidString: stored),
+           self.sessions.contains(where: { $0.id == id }) {
+            self.activeSessionID = id
+        } else {
+            self.activeSessionID = self.sessions.first?.id
+        }
+    }
+
+    // MARK: - Session management
+
+    /// Creates a new empty session and makes it active.
+    @discardableResult
+    func newSession() -> ChatSession {
+        let session = ChatSession()
+        sessions.insert(session, at: 0)
+        activeSessionID = session.id
+        return session
+    }
+
+    /// Deletes a session (by id).
+    func delete(_ session: ChatSession) {
+        sessions.removeAll { $0.id == session.id }
+
+        if activeSessionID == session.id {
+            activeSessionID = sessions.first?.id
+        }
+    }
+
+    /// Deletes all sessions.
+    func deleteAll() {
+        sessions.removeAll()
+        activeSessionID = nil
+    }
+
+    /// Appends a message to the given session and persists it.
+    func appendMessage(_ message: ChatMessage, to sessionID: UUID) {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+        sessions[index].messages.append(message)
+        sessions[index].autoTitle()
+    }
+
+    /// Updates the content of the last assistant message in a session.
+    ///
+    /// Used by the streaming pipeline to accumulate deltas into the
+    /// in-flight assistant reply.
+    func updateLastAssistantContent(_ content: String, in sessionID: UUID) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let msgIndex = sessions[sessionIndex].messages.indices.last,
+              sessions[sessionIndex].messages[msgIndex].role == .assistant else {
+            return
+        }
+        sessions[sessionIndex].messages[msgIndex].content = content
+    }
+
+    /// Removes a partially-received assistant message (used when a stream fails
+    /// before yielding anything useful).
+    func removeLastAssistantMessage(in sessionID: UUID) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let msgIndex = sessions[sessionIndex].messages.indices.last,
+              sessions[sessionIndex].messages[msgIndex].role == .assistant,
+              sessions[sessionIndex].messages[msgIndex].content.isEmpty else {
+            return
+        }
+        sessions[sessionIndex].messages.remove(at: msgIndex)
+    }
+
+    // MARK: - Persistence
+
+    private func persist() {
+        guard let data = try? JSONEncoder().encode(sessions) else { return }
+        UserDefaults.standard.set(data, forKey: Self.sessionsKey)
+    }
+}
