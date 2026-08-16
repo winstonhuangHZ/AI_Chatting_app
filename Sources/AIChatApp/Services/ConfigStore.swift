@@ -25,10 +25,12 @@ final class ConfigStore: ObservableObject {
     /// The profile currently selected for chatting.
     @Published var activeConfigID: UUID? {
         didSet {
-            UserDefaults.standard.set(
+            let defaults = UserDefaults.standard
+            defaults.set(
                 activeConfigID?.uuidString,
                 forKey: Self.activeIDKey
             )
+            defaults.synchronize()
         }
     }
 
@@ -86,11 +88,17 @@ final class ConfigStore: ObservableObject {
         }
     }
 
-    /// Refreshes the stored model list for a profile after a `fetchModels`
-    /// call. Also normalizes the base URL to its canonical form.
-    func updateModels(_ models: [String], normalizedBaseURL: URL, for configID: UUID) {
+    /// Refreshes the stored model list + dynamic prices for a profile after a
+    /// `fetchModels` call. Also normalizes the base URL to its canonical form.
+    func updateModels(
+        _ models: [String],
+        prices: [String: ModelPrice],
+        normalizedBaseURL: URL,
+        for configID: UUID
+    ) {
         guard let index = configs.firstIndex(where: { $0.id == configID }) else { return }
         configs[index].availableModels = models
+        configs[index].modelPrices = prices
         configs[index].baseURL = normalizedBaseURL.absoluteString
     }
 
@@ -98,6 +106,9 @@ final class ConfigStore: ObservableObject {
 
     private func persist() {
         guard let data = try? JSONEncoder().encode(configs) else { return }
-        UserDefaults.standard.set(data, forKey: Self.configsKey)
+        let defaults = UserDefaults.standard
+        defaults.set(data, forKey: Self.configsKey)
+        // Synchronous flush so profiles survive an immediate quit / power loss.
+        defaults.synchronize()
     }
 }

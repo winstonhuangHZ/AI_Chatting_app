@@ -119,6 +119,9 @@ final class SessionStore: ObservableObject {
 
     private func persist() {
         guard let data = try? JSONEncoder().encode(sessions) else { return }
-        UserDefaults.standard.set(data, forKey: Self.sessionsKey)
+        let defaults = UserDefaults.standard
+        defaults.set(data, forKey: Self.sessionsKey)
+        // Synchronous flush so chats survive an immediate quit / power loss.
+        defaults.synchronize()
     }
 }

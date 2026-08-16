@@ -39,8 +39,9 @@ enum MultimodalSupport {
         return visionKeywords.contains { lower.contains($0) }
     }
 
-    /// Returns a display label: original name + 🖼 marker when multimodal.
+    /// Returns a display label: 🖼 marker to the *right* of the model name
+    /// when multimodal (e.g. `gpt-4o-mini 🖼`).
     static func displayName(_ modelID: String) -> String {
-        isMultimodal(modelID) ? "🖼 \(modelID)" : modelID
+        isMultimodal(modelID) ? "\(modelID) 🖼" : modelID
     }
 }

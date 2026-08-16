@@ -104,7 +104,7 @@ final class AppSettingViewModel: ObservableObject {
             self.isTestingConnection = false
 
             switch result {
-            case .success(let models):
+            case .success(let (models, _)):
                 self.statusMessage = "✓ Connected — \(models.count) model(s) available."
                 self.statusIsError = false
             case .failure(let error):
@@ -132,8 +132,8 @@ final class AppSettingViewModel: ObservableObject {
             self.isLoadingModels = false
 
             switch result {
-            case .success(let models):
-                // Normalize the base URL and persist models.
+            case .success(let (models, prices)):
+                // Normalize the base URL and persist models + dynamic prices.
                 guard let normalized = try? self.service.normalizedBaseURL(from: config.baseURL) else {
                     self.statusMessage = "Invalid base URL."
                     self.statusIsError = true
@@ -142,6 +142,7 @@ final class AppSettingViewModel: ObservableObject {
 
                 self.configStore.updateModels(
                     models,
+                    prices: prices,
                     normalizedBaseURL: normalized,
                     for: configID
                 )

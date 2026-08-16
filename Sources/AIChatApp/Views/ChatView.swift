@@ -36,6 +36,13 @@ struct ChatView: View {
 
             Divider()
 
+            // Live token counter + cost estimate for the active conversation.
+            UsageBarView(
+                messages: self.chatViewModel.activeMessages,
+                model: self.configStore.activeConfig?.selectedModel ?? "",
+                dynamicPrices: self.configStore.activeConfig?.modelPrices ?? [:]
+            )
+
             InputBarView(
                 onSend: { text, attachments in
                     self.chatViewModel.sendMessage(
@@ -381,6 +388,90 @@ private struct AttachmentThumbnail: View {
                 .background(Color.gray.opacity(0.15))
                 .cornerRadius(6)
         }
+    }
+}
+
+// MARK: - Usage bar
+
+/// Bottom status bar showing live token counts and an estimated cost for
+/// the active conversation (updates automatically as messages stream in).
+private struct UsageBarView: View {
+
+    /// Messages in the active session.
+    let messages: [ChatMessage]
+
+    /// Active model id (drives the price lookup).
+    let model: String
+
+    /// Dynamic prices fetched from the relay (may be empty).
+    let dynamicPrices: [String: ModelPrice]
+
+    // MARK: - Computed state
+
+    /// Live token summary for the conversation.
+    private var summary: (input: Int, output: Int) {
+        TokenUsage.summarize(self.messages)
+    }
+
+    /// Estimated cost — prefers relay dynamic prices, falls back to the table.
+    private var estimatedCost: Double? {
+        TokenUsage.estimatedCost(
+            model: self.model,
+            inputTokens: summary.input,
+            outputTokens: summary.output,
+            dynamicPrices: self.dynamicPrices
+        )
+    }
+
+    /// Whether the model id is unknown (no dynamic price and no table row).
+    private var priceUnknown: Bool {
+        !self.model.isEmpty && TokenUsage.prices(
+            for: self.model,
+            dynamicPrices: self.dynamicPrices
+        ) == nil
+    }
+
+    /// Whether we're using a relay-provided dynamic price.
+    private var usingDynamicPrice: Bool {
+        guard let price = self.dynamicPrices[self.model] else { return false }
+        return price.isValid
+    }
+
+    // MARK: - Body
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("Tokens: ↑\(TokenUsage.formatCount(self.summary.input)) ↓\(TokenUsage.formatCount(self.summary.output))")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+
+            if self.estimatedCost != nil {
+                Text("≈ \(TokenUsage.formatCost(self.estimatedCost!))")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+
+            if self.priceUnknown {
+                Text("(price unknown for this model)")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            } else if self.usingDynamicPrice {
+                Text("(relay price)")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            if !self.messages.isEmpty {
+                Text("\(self.messages.count) msg(s)")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(Color(NSColor.windowBackgroundColor))
     }
 }
 

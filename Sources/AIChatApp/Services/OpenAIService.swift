@@ -52,9 +52,18 @@ final class OpenAIService: NSObject, URLSessionDataDelegate {
     // MARK: - Nested response types
 
     /// JSON body returned by `GET /v1/models`.
+    ///
+    /// Some relays (OpenRouter / one-api / new-api) extend each model entry
+    /// with a `pricing` object:
+    ///   {"id":"gpt-4o-mini","pricing":{"prompt":0.15,"completion":0.6}}
     private struct ModelsResponse: Decodable {
         struct ModelItem: Decodable {
             let id: String
+            struct Pricing: Decodable {
+                let prompt: Double?
+                let completion: Double?
+            }
+            let pricing: Pricing?
         }
         let data: [ModelItem]
     }
@@ -183,7 +192,7 @@ final class OpenAIService: NSObject, URLSessionDataDelegate {
     ///     or an error.
     func fetchModels(
         config: APIServerConfig,
-        completion: @escaping (Result<[String], Error>) -> Void
+        completion: @escaping (Result<([String], [String: ModelPrice]), Error>) -> Void
     ) {
         do {
             let baseURL = try normalizedBaseURL(from: config.baseURL)
@@ -227,7 +236,16 @@ final class OpenAIService: NSObject, URLSessionDataDelegate {
                     do {
                         let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
                         let models = Array(Set(decoded.data.map { $0.id })).sorted()
-                        completion(.success(models))
+                        // Extract relay-provided dynamic prices (OpenRouter-style).
+                        var prices: [String: ModelPrice] = [:]
+                        for item in decoded.data {
+                            guard let pricing = item.pricing,
+                                  let prompt = pricing.prompt,
+                                  let completion = pricing.completion,
+                                  prompt >= 0, completion >= 0 else { continue }
+                            prices[item.id] = ModelPrice(prompt: prompt, completion: completion)
+                        }
+                        completion(.success((models, prices)))
                     } catch {
                         completion(.failure(OpenAIServiceError.decodingFailed(
                             "Expected {\"data\":[{\"id\":\"model\"}]}. \(error.localizedDescription)"

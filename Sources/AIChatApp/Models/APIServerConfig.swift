@@ -1,5 +1,24 @@
 import Foundation
 
+/// Price for one model as reported by the relay (OpenRouter-style extension).
+///
+/// Many OpenAI-compatible relays (one-api / new-api / OpenRouter format)
+/// include a `pricing` object on each model entry in `GET /v1/models`:
+///   {"id":"gpt-4o-mini","pricing":{"prompt":0.15,"completion":0.6}}
+/// Units are USD per 1M tokens.
+struct ModelPrice: Codable, Hashable {
+    /// USD per 1M input (prompt) tokens.
+    var prompt: Double
+
+    /// USD per 1M output (completion) tokens.
+    var completion: Double
+
+    /// Whether both prices are non-negative (sane).
+    var isValid: Bool {
+        prompt >= 0 && completion >= 0
+    }
+}
+
 /// Represents a single OpenAI-compatible API relay server profile.
 ///
 /// Stored in `UserDefaults` as JSON, so it conforms to `Codable` and
@@ -28,6 +47,10 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     /// Models reported by the relay's `GET /v1/models` endpoint.
     var availableModels: [String]
 
+    /// Dynamic prices fetched from the relay (keyed by model id).
+    /// Empty when the relay does not expose `pricing`.
+    var modelPrices: [String: ModelPrice]
+
     // MARK: - Initializers
 
     init(
@@ -36,7 +59,8 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         baseURL: String = "",
         apiKey: String = "",
         selectedModel: String = "",
-        availableModels: [String] = []
+        availableModels: [String] = [],
+        modelPrices: [String: ModelPrice] = [:]
     ) {
         self.id = id
         self.name = name
@@ -44,6 +68,7 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         self.apiKey = apiKey
         self.selectedModel = selectedModel
         self.availableModels = availableModels
+        self.modelPrices = modelPrices
     }
 
     /// A friendly display name for UI lists.
@@ -51,5 +76,20 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "Unnamed profile"
             : name
+    }
+
+    // MARK: - Codable
+
+    /// Custom decoding so profiles persisted *before* dynamic pricing support
+    /// (without a `modelPrices` key) still decode correctly.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        baseURL = try container.decode(String.self, forKey: .baseURL)
+        apiKey = try container.decode(String.self, forKey: .apiKey)
+        selectedModel = try container.decode(String.self, forKey: .selectedModel)
+        availableModels = try container.decode([String].self, forKey: .availableModels)
+        modelPrices = try container.decodeIfPresent([String: ModelPrice].self, forKey: .modelPrices) ?? [:]
     }
 }
