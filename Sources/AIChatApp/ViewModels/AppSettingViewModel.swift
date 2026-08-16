@@ -33,6 +33,9 @@ final class AppSettingViewModel: ObservableObject {
     /// `true` when the status message represents an error.
     @Published var statusIsError = false
 
+    /// Combine subscriptions.
+    private var cancellables = Set<AnyCancellable>()
+
     // MARK: - Convenience
 
     /// The active profile object, if any.
@@ -50,9 +53,15 @@ final class AppSettingViewModel: ObservableObject {
 
         // Mirror store changes into this VM for one-way data flow.
         configStore.$configs
-            .assign(to: &$configs)
+            .sink { [weak self] newConfigs in
+                self?.configs = newConfigs
+            }
+            .store(in: &cancellables)
         configStore.$activeConfigID
-            .assign(to: &$activeConfigID)
+            .sink { [weak self] newID in
+                self?.activeConfigID = newID
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - CRUD
@@ -91,7 +100,7 @@ final class AppSettingViewModel: ObservableObject {
         statusIsError = false
 
         service.fetchModels(config: config) { [weak self] result in
-            guard let self else { return }
+            guard let self = self else { return }
             self.isTestingConnection = false
 
             switch result {
@@ -119,7 +128,7 @@ final class AppSettingViewModel: ObservableObject {
         statusIsError = false
 
         service.fetchModels(config: config) { [weak self] result in
-            guard let self else { return }
+            guard let self = self else { return }
             self.isLoadingModels = false
 
             switch result {

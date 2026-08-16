@@ -36,27 +36,17 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 info "Compiling Swift sources with swiftc..."
 SWIFT_FILES=$(find "$SRC_DIR" -name '*.swift' | sort)
 
-# Prefer the modern standalone toolchain (supports current Swift syntax);
-# fall back to whatever `swiftc` resolves on PATH.
+# Use the system toolchain (Swift 5.2 bundled with Command Line Tools).
+# This is the same approach music_alarm uses — it compiles fine with the
+# legacy "macosx10.15" triple and the system SDK.
 SWIFTC="swiftc"
-if [ -x "/Library/Developer/Toolchains/swift-5.10-RELEASE.xctoolchain/usr/bin/swiftc" ]; then
-  SWIFTC="/Library/Developer/Toolchains/swift-5.10-RELEASE.xctoolchain/usr/bin/swiftc"
-fi
 info "Using compiler: $SWIFTC"
-
-# Explicitly point at the Command Line Tools SDK so the standalone toolchain
-# can find AppKit / SwiftUI frameworks.
-SDK_PATH=""
-if [ -d "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk" ]; then
-  SDK_PATH="-sdk /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"
-fi
 
 compile_arch() {
   local arch="$1" target
-  # Try the legacy "macosx10.15" triple first (verified against this SDK),
-  # then the modern "macos10.15" form for newer toolchains.
-  for t in "$arch-apple-macosx${MIN_MACOS}" "$arch-apple-macos${MIN_MACOS}"; do
-    if "$SWIFTC" -O -swift-version 5 $SDK_PATH \
+  # Legacy triple compatible with the system SDK.
+  for t in "$arch-apple-macosx${MIN_MACOS}" "$arch-apple-macosx10.14"; do
+    if "$SWIFTC" -O -swift-version 5 \
         -target "$t" \
         -framework SwiftUI \
         -framework AppKit \

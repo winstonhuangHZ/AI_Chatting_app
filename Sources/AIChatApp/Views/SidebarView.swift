@@ -1,7 +1,8 @@
 import SwiftUI
+import AppKit
 
 /// Left sidebar: list of chat sessions with a "New Chat" button and
-/// per-item delete support (10.15-compatible List).
+/// delete-all support (Swift 5.2 / macOS 10.15-compatible).
 struct SidebarView: View {
 
     // MARK: - Environment
@@ -14,68 +15,42 @@ struct SidebarView: View {
         VStack(spacing: 0) {
             // New Chat button pinned at the top
             Button(action: {
-                chatViewModel.createNewChat()
+                self.chatViewModel.createNewChat()
             }) {
-                Label("New Chat", systemImage: "square.and.pencil")
+                Text("＋ New Chat")
+                    .font(.system(size: 13, weight: .semibold))
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(BorderedProminentButtonStyle())
+            .buttonStyle(BorderedButtonStyle())
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
             Divider()
 
-            if chatViewModel.sessions.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "bubble.left.and.bubble.right")
-                        .font(.system(size: 32))
-                        .foregroundColor(.secondary)
-                    Text("No chats yet")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                    Text("Click “New Chat” to start.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if self.chatViewModel.sessions.isEmpty {
+                self.emptyState
             } else {
-                List(
-                    chatViewModel.sessions,
-                    selection: Binding(
-                        get: { chatViewModel.selectedSessionID },
-                        set: { chatViewModel.selectSessionID($0) }
-                    )
-                ) { session in
-                    SidebarRow(
-                        session: session,
-                        isSelected: chatViewModel.selectedSessionID == session.id
-                    )
-                    .tag(session.id)
-                    .onTapGesture {
-                        chatViewModel.selectSession(session)
-                    }
-                }
+                self.sessionList
             }
 
             Divider()
 
             // Footer: count + delete all
-            if !chatViewModel.sessions.isEmpty {
+            if !self.chatViewModel.sessions.isEmpty {
                 HStack {
-                    Text("\(chatViewModel.sessions.count) chat(s)")
-                        .font(.caption)
+                    Text("\(self.chatViewModel.sessions.count) chat(s)")
+                        .font(.system(size: 11))
                         .foregroundColor(.secondary)
                     Spacer()
-                    Button {
-                        for session in chatViewModel.sessions {
-                            chatViewModel.deleteSession(session)
+                    Button(action: {
+                        for session in self.chatViewModel.sessions {
+                            self.chatViewModel.deleteSession(session)
                         }
-                    } label: {
-                        Image(systemName: "trash")
-                            .foregroundColor(.red)
+                    }) {
+                        Text("🗑")
+                            .font(.system(size: 13))
                     }
                     .buttonStyle(BorderlessButtonStyle())
-                    .help("Delete all chats")
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
@@ -84,12 +59,57 @@ struct SidebarView: View {
         .frame(minWidth: 180)
         .background(Color(NSColor.windowBackgroundColor))
     }
+
+    // MARK: - Session list
+
+    private var sessionList: some View {
+        ScrollView {
+            VStack(spacing: 4) {
+                ForEach(self.chatViewModel.sessions) { session in
+                    SessionRow(
+                        session: session,
+                        isSelected: self.chatViewModel.activeSessionID == session.id
+                    )
+                    .onTapGesture {
+                        self.chatViewModel.selectSession(session)
+                    }
+                }
+            }
+            .padding(8)
+        }
+    }
+
+    // MARK: - Empty state
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Text("💬")
+                .font(.system(size: 28))
+                .foregroundColor(.secondary)
+            Text("No chats yet")
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+            Text("Click “New Chat” to start.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Date formatting
+
+/// 10.15-safe relative time string (Text(date, style: .relative) is 11+).
+private func relativeTimeString(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd HH:mm"
+    return formatter.string(from: date)
 }
 
 // MARK: - Row
 
 /// A single chat session row in the sidebar.
-private struct SidebarRow: View {
+private struct SessionRow: View {
 
     /// Session to display.
     let session: ChatSession
@@ -102,29 +122,34 @@ private struct SidebarRow: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
-                Text(session.title)
-                    .font(.body)
+                Text(self.session.title)
+                    .font(.system(size: 13))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .foregroundColor(isSelected ? Color.accentColor : Color.primary)
+                    .foregroundColor(self.isSelected ? Color.accentColor : Color.primary)
 
                 HStack(spacing: 4) {
-                    Text(session.createdAt, style: .relative)
-                        .font(.caption2)
+                    Text(relativeTimeString(self.session.createdAt))
+                        .font(.system(size: 10))
                         .foregroundColor(.secondary)
-                    if !session.messages.isEmpty {
+                    if !self.session.messages.isEmpty {
                         Text("•")
-                            .font(.caption2)
+                            .font(.system(size: 10))
                             .foregroundColor(.secondary)
-                        Text("\(session.messages.count) msgs")
-                            .font(.caption2)
+                        Text("\(self.session.messages.count) msgs")
+                            .font(.system(size: 10))
                             .foregroundColor(.secondary)
                     }
                 }
             }
             Spacer()
         }
-        .padding(.vertical, 2)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(self.isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+        )
         .contentShape(Rectangle())
     }
 }

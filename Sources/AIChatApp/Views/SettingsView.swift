@@ -4,7 +4,8 @@ import AppKit
 /// Settings window: manages API relay profiles (add / edit / delete),
 /// connection testing, and model list fetching.
 ///
-/// Uses only macOS 10.15-compatible SwiftUI API.
+/// Uses only macOS 10.15-compatible SwiftUI API — no SF Symbols, no `if let`
+/// in ViewBuilders, explicit `self.` in closures (Swift 5.2 rules).
 struct SettingsView: View {
 
     // MARK: - Environment
@@ -27,15 +28,15 @@ struct SettingsView: View {
 
     var body: some View {
         Group {
-            if let editingConfig {
+            if self.editingConfig != nil {
                 ProfileEditView(
-                    config: editingConfig,
-                    isNew: isAddingNew,
+                    config: self.editingConfig!,
+                    isNew: self.isAddingNew,
                     onSave: { updated in
-                        if isAddingNew {
-                            appSettingViewModel.add(updated)
+                        if self.isAddingNew {
+                            self.appSettingViewModel.add(updated)
                         } else {
-                            appSettingViewModel.update(updated)
+                            self.appSettingViewModel.update(updated)
                         }
                         self.editingConfig = nil
                     },
@@ -46,29 +47,29 @@ struct SettingsView: View {
             } else {
                 ProfileListView(
                     onAdd: {
-                        isAddingNew = true
-                        editingConfig = APIServerConfig(name: "New Profile")
+                        self.isAddingNew = true
+                        self.editingConfig = APIServerConfig(name: "New Profile")
                     },
                     onEdit: { config in
-                        isAddingNew = false
-                        editingConfig = config
+                        self.isAddingNew = false
+                        self.editingConfig = config
                     }
                 )
             }
         }
         .frame(width: 520, height: 440)
-        .alert(isPresented: $showStatusAlert) {
+        .alert(isPresented: self.$showStatusAlert) {
             Alert(
-                title: Text(appSettingViewModel.statusIsError ? "Operation Failed" : "Success"),
-                message: Text(appSettingViewModel.statusMessage ?? ""),
+                title: Text(self.appSettingViewModel.statusIsError ? "Operation Failed" : "Success"),
+                message: Text(self.appSettingViewModel.statusMessage ?? ""),
                 dismissButton: .default(Text("OK")) {
-                    appSettingViewModel.clearStatus()
+                    self.appSettingViewModel.clearStatus()
                 }
             )
         }
-        .onReceive(appSettingViewModel.$statusMessage) { message in
+        .onReceive(self.appSettingViewModel.$statusMessage) { message in
             if message != nil {
-                showStatusAlert = true
+                self.showStatusAlert = true
             }
         }
     }
@@ -94,14 +95,14 @@ private struct ProfileListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            self.header
 
             Divider()
 
-            if configStore.configs.isEmpty {
-                emptyState
+            if self.configStore.configs.isEmpty {
+                self.emptyState
             } else {
-                profileRows
+                self.profileRows
             }
         }
     }
@@ -111,14 +112,15 @@ private struct ProfileListView: View {
     private var header: some View {
         HStack {
             Text("API Relay Profiles")
-                .font(.title2.bold())
+                .font(.system(size: 18, weight: .semibold))
 
             Spacer()
 
-            Button(action: onAdd) {
-                Label("Add Profile", systemImage: "plus")
+            Button(action: self.onAdd) {
+                Text("＋ Add Profile")
+                    .font(.system(size: 13, weight: .semibold))
             }
-            .buttonStyle(BorderedProminentButtonStyle())
+            .buttonStyle(BorderedButtonStyle())
         }
         .padding(16)
     }
@@ -127,17 +129,17 @@ private struct ProfileListView: View {
 
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "network.slash")
-                .font(.system(size: 36))
+            Text("📡")
+                .font(.system(size: 30))
                 .foregroundColor(.secondary)
             Text("No Profiles")
-                .font(.headline)
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(.secondary)
             Text("Add an OpenAI-compatible relay server to start chatting.")
-                .font(.callout)
+                .font(.system(size: 13))
                 .foregroundColor(.secondary)
-            Button("Add Profile", action: onAdd)
-                .buttonStyle(BorderedProminentButtonStyle())
+            Button("Add Profile", action: self.onAdd)
+                .buttonStyle(BorderedButtonStyle())
                 .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -148,19 +150,27 @@ private struct ProfileListView: View {
     private var profileRows: some View {
         ScrollView {
             VStack(spacing: 8) {
-                ForEach(configStore.configs) { config in
+                ForEach(self.configStore.configs) { config in
                     ProfileRow(
                         config: config,
-                        isActive: configStore.activeConfigID == config.id,
-                        isTesting: appSettingViewModel.isTestingConnection
-                            && configStore.activeConfigID == config.id,
+                        isActive: self.configStore.activeConfigID == config.id,
+                        isTesting: self.appSettingViewModel.isTestingConnection
+                            && self.configStore.activeConfigID == config.id,
                         onActivate: {
-                            configStore.activeConfigID = config.id
+                            self.configStore.activeConfigID = config.id
                         },
-                        onEdit: { onEdit(config) },
-                        onDelete: { appSettingViewModel.delete(config) },
-                        onFetchModels: { appSettingViewModel.fetchModels(for: config.id) },
-                        onTest: { appSettingViewModel.testConnection(for: config) }
+                        onEdit: {
+                            self.onEdit(config)
+                        },
+                        onDelete: {
+                            self.appSettingViewModel.delete(config)
+                        },
+                        onFetchModels: {
+                            self.appSettingViewModel.fetchModels(for: config.id)
+                        },
+                        onTest: {
+                            self.appSettingViewModel.testConnection(for: config)
+                        }
                     )
                 }
             }
@@ -203,12 +213,12 @@ private struct ProfileRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(config.displayName)
-                    .font(.headline)
+                Text(self.config.displayName)
+                    .font(.system(size: 14, weight: .semibold))
 
-                if isActive {
+                if self.isActive {
                     Text("Active")
-                        .font(.caption)
+                        .font(.system(size: 10))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Color.accentColor.opacity(0.15))
@@ -217,52 +227,50 @@ private struct ProfileRow: View {
 
                 Spacer()
 
-                if isTesting {
-                    ProgressView()
-                        .controlSize(.small)
-                        .help("Testing connection…")
+                if self.isTesting {
+                    Text("…")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
                 }
             }
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(config.baseURL.isEmpty ? "No base URL set" : config.baseURL)
-                    .font(.callout)
+                Text(self.config.baseURL.isEmpty ? "No base URL set" : self.config.baseURL)
+                    .font(.system(size: 12))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
 
-                Text(config.apiKey.isEmpty ? "No API key set" : "API key: ••••••••")
-                    .font(.caption)
+                Text(self.config.apiKey.isEmpty ? "No API key set" : "API key: ••••••••")
+                    .font(.system(size: 11))
                     .foregroundColor(.secondary)
 
-                Text(config.selectedModel.isEmpty
+                Text(self.config.selectedModel.isEmpty
                      ? "No model selected"
-                     : "Model: \(config.selectedModel)")
-                    .font(.caption)
+                     : "Model: \(self.config.selectedModel)")
+                    .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
 
             HStack(spacing: 8) {
                 Button(
-                    config.availableModels.isEmpty ? "Fetch Models" : "\(config.availableModels.count) models",
-                    action: onFetchModels
+                    self.config.availableModels.isEmpty ? "Fetch Models" : "\(self.config.availableModels.count) models",
+                    action: self.onFetchModels
                 )
                 .buttonStyle(BorderedButtonStyle())
-                .help("Fetch available models from the relay")
 
-                Button("Test", action: onTest)
+                Button("Test", action: self.onTest)
                     .buttonStyle(BorderedButtonStyle())
-                    .help("Test API connection")
 
-                Button("Edit", action: onEdit)
+                Button("Edit", action: self.onEdit)
                     .buttonStyle(BorderedButtonStyle())
 
                 Spacer()
 
-                Button("Delete", action: onDelete)
+                Button("Delete", action: self.onDelete)
                     .buttonStyle(BorderedButtonStyle())
                     .foregroundColor(.red)
             }
-            .font(.callout)
+            .font(.system(size: 12))
         }
         .padding(12)
         .background(Color(NSColor.controlBackgroundColor))
@@ -310,97 +318,104 @@ private struct ProfileEditView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(isNew ? "Add Profile" : "Edit Profile")
-                .font(.title2.bold())
+            Text(self.isNew ? "Add Profile" : "Edit Profile")
+                .font(.system(size: 18, weight: .semibold))
 
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Profile Name")
-                        .font(.caption)
+                        .font(.system(size: 11))
                         .foregroundColor(.secondary)
-                    TextField("Profile Name", text: $draft.name)
+                    TextField("Profile Name", text: self.$draft.name)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Base URL")
-                        .font(.caption)
+                        .font(.system(size: 11))
                         .foregroundColor(.secondary)
-                    TextField("Base URL", text: $draft.baseURL)
+                    TextField("Base URL", text: self.$draft.baseURL)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .help("e.g. https://api.openai.com or https://relay.example.com/v1")
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("API Key")
-                        .font(.caption)
+                        .font(.system(size: 11))
                         .foregroundColor(.secondary)
-                    SecureField("API Key", text: $draft.apiKey)
+                    SecureField("API Key", text: self.$draft.apiKey)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                 }
 
-                // Model management section
-                if !isNew {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Divider()
-
-                        Text("Models")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        Picker("Selected Model", selection: $draft.selectedModel) {
-                            if draft.availableModels.isEmpty {
-                                Text("No models yet").tag("")
-                            }
-                            ForEach(draft.availableModels, id: \.self) { model in
-                                Text(model).tag(model)
-                            }
-                        }
-                        .disabled(draft.availableModels.isEmpty)
-
-                        HStack {
-                            Button {
-                                appSettingViewModel.fetchModels(for: draft.id)
-                                // Pull updated models back after a brief delay.
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                                    if let updated = configStore.configs.first(where: { $0.id == draft.id }) {
-                                        draft = updated
-                                    }
-                                }
-                            } label: {
-                                Label("Fetch Models", systemImage: "arrow.clockwise")
-                            }
-                            .disabled(appSettingViewModel.isLoadingModels)
-
-                            if appSettingViewModel.isLoadingModels {
-                                ProgressView()
-                                    .controlSize(.small)
-                            }
-                        }
-                    }
+                // Model management section (existing profiles only)
+                if !self.isNew {
+                    self.modelSection
                 }
             }
 
             HStack {
-                Button("Cancel", action: onCancel)
+                Button("Cancel", action: self.onCancel)
                     .buttonStyle(BorderedButtonStyle())
 
                 Spacer()
 
-                Button(action: save) {
-                    Text(isNew ? "Add" : "Save")
+                Button(action: {
+                    self.save()
+                }) {
+                    Text(self.isNew ? "Add" : "Save")
+                        .font(.system(size: 13, weight: .semibold))
                 }
-                .buttonStyle(BorderedProminentButtonStyle())
-                .keyboardShortcut(.defaultAction)
-                .disabled(!isValid)
+                .buttonStyle(BorderedButtonStyle())
+                .disabled(!self.isValid)
             }
             .padding(.top, 4)
         }
         .padding(20)
         .onAppear {
             // For existing profiles, reflect any previously-fetched models.
-            if let existing = configStore.configs.first(where: { $0.id == draft.id }) {
-                draft = existing
+            if let existing = self.configStore.configs.first(where: { $0.id == self.draft.id }) {
+                self.draft = existing
+            }
+        }
+    }
+
+    // MARK: - Model section
+
+    private var modelSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+
+            Text("Models")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+
+            Picker("Selected Model", selection: self.$draft.selectedModel) {
+                if self.draft.availableModels.isEmpty {
+                    Text("No models yet").tag("")
+                }
+                ForEach(self.draft.availableModels, id: \.self) { model in
+                    Text(model).tag(model)
+                }
+            }
+            .disabled(self.draft.availableModels.isEmpty)
+
+            HStack {
+                Button("Fetch Models") {
+                    self.appSettingViewModel.fetchModels(for: self.draft.id)
+                    // Pull updated models back after a brief delay.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        if let updated = self.configStore.configs.first(where: { $0.id == self.draft.id }) {
+                            self.draft = updated
+                        }
+                    }
+                }
+                .buttonStyle(BorderedButtonStyle())
+                .disabled(self.appSettingViewModel.isLoadingModels)
+
+                if self.appSettingViewModel.isLoadingModels {
+                    Text("Loading…")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
             }
         }
     }
@@ -408,16 +423,16 @@ private struct ProfileEditView: View {
     // MARK: - Validation
 
     private var isValid: Bool {
-        !draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !draft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !self.draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !self.draft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // MARK: - Actions
 
     private func save() {
         // Normalize whitespace in key fields.
-        draft.name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        draft.baseURL = draft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        onSave(draft)
+        self.draft.name = self.draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.draft.baseURL = self.draft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.onSave(self.draft)
     }
 }

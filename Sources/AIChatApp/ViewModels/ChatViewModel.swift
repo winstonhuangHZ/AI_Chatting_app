@@ -6,6 +6,10 @@ import Combine
 ///
 /// Uses the callback-based `OpenAIService` (no async/await) so it compiles
 /// with older SDKs. All network callbacks arrive on the main queue.
+///
+/// IMPORTANT: Sidebar selection is driven by `activeSessionID` only.
+/// There are NO Combine sinks that write back to `activeSessionID`, which
+/// would cause an infinite feedback loop and stack overflow.
 final class ChatViewModel: ObservableObject {
 
     // MARK: - Dependencies
@@ -19,14 +23,11 @@ final class ChatViewModel: ObservableObject {
     /// All sessions (delegated to the shared store).
     @Published var sessions: [ChatSession] = []
 
-    /// The selected session id (delegated to the shared store).
+    /// The selected session id (single source of truth; sidebar reads this).
     @Published var activeSessionID: UUID?
 
     /// `true` while a stream request is in flight.
     @Published var isStreaming = false
-
-    /// Selection binding fed to the sidebar `List`.
-    @Published var selectedSessionID: UUID?
 
     /// User-facing error banner text (nil hides the banner).
     @Published var errorMessage: String?
@@ -66,27 +67,18 @@ final class ChatViewModel: ObservableObject {
 
         self.sessions = sessionStore.sessions
         self.activeSessionID = sessionStore.activeSessionID
-        self.selectedSessionID = sessionStore.activeSessionID
 
-        sessionStore.$sessions.assign(to: &$sessions)
-        sessionStore.$activeSessionID.assign(to: &$activeSessionID)
+        // Mirror store changes into this VM (one-way: store → VM).
+        // No sinks write back to the store, so no feedback loops occur.
+        sessionStore.$sessions.sink { [weak self] newSessions in
+            self?.sessions = newSessions
+        }
+        .store(in: &cancellables)
 
-        // Keep the sidebar selection in sync with the active session.
-        $activeSessionID
-            .dropFirst()
-            .sink { [weak self] newID in
-                self?.selectedSessionID = newID
-            }
-            .store(in: &cancellables)
-
-        // When the user clicks a sidebar row, switch the active session.
-        $selectedSessionID
-            .dropFirst()
-            .sink { [weak self] newID in
-                guard let newID else { return }
-                self?.activeSessionID = newID
-            }
-            .store(in: &cancellables)
+        sessionStore.$activeSessionID.sink { [weak self] newID in
+            self?.activeSessionID = newID
+        }
+        .store(in: &cancellables)
     }
 
     // MARK: - Session management
@@ -110,12 +102,6 @@ final class ChatViewModel: ObservableObject {
         sessionStore.activeSessionID = session.id
     }
 
-    /// Selects a session by id (used by the list selection binding).
-    func selectSessionID(_ id: UUID?) {
-        guard let id, let session = sessions.first(where: { $0.id == id }) else { return }
-        selectSession(session)
-    }
-
     // MARK: - Sending messages
 
     /// Sends the user's text as a message and kicks off a streaming reply.
@@ -123,7 +109,7 @@ final class ChatViewModel: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard let sessionID = activeSessionID else { return }
-        guard let config else {
+        guard let config = config else {
             errorMessage = "No active API profile. Add one in Settings first."
             return
         }
@@ -144,7 +130,6 @@ final class ChatViewModel: ObservableObject {
         let history = sessionStore.activeSession?.messages
             .filter { !$0.content.isEmpty } ?? []
 
-        let service = service
         let configForRequest = config
         let modelForRequest = model
 
@@ -155,7 +140,7 @@ final class ChatViewModel: ObservableObject {
             model: modelForRequest,
             messages: history,
             onDelta: { [weak self] delta in
-                guard let self else { return }
+                guard let self = self else { return }
                 // If the user switched sessions mid-stream, stop writing.
                 guard self.activeSessionID == sessionID else {
                     self.cancelStreaming()
@@ -167,13 +152,13 @@ final class ChatViewModel: ObservableObject {
                 )
             },
             onComplete: { [weak self] in
-                guard let self else { return }
+                guard let self = self else { return }
                 self.isStreaming = false
                 self.streamTask = nil
                 self.streamingAssistantID = nil
             },
             onError: { [weak self] error in
-                guard let self else { return }
+                guard let self = self else { return }
                 self.isStreaming = false
                 self.streamTask = nil
                 self.streamingAssistantID = nil

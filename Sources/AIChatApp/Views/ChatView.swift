@@ -4,7 +4,8 @@ import AppKit
 /// Main chat pane: top configuration bar, scrollable message list,
 /// streaming indicator, and multi-line input bar.
 ///
-/// Uses only macOS 10.15-compatible SwiftUI API.
+/// Uses only macOS 10.15-compatible SwiftUI API — no SF Symbols
+/// (`Image(systemName:)`), no MenuPickerStyle, explicit `self.` in closures.
 struct ChatView: View {
 
     // MARK: - Environment
@@ -23,11 +24,11 @@ struct ChatView: View {
 
             Divider()
 
-            if chatViewModel.activeSession != nil {
+            if self.chatViewModel.activeSession != nil {
                 MessageList(
-                    session: chatViewModel.activeSession!,
-                    streamingMessageID: chatViewModel.streamingAssistantID,
-                    lastMessageID: $lastMessageID
+                    session: self.chatViewModel.activeSession!,
+                    streamingMessageID: self.chatViewModel.streamingAssistantID,
+                    lastMessageID: self.$lastMessageID
                 )
             } else {
                 emptyStateView
@@ -37,41 +38,49 @@ struct ChatView: View {
 
             InputBarView(
                 onSend: handleSend,
-                isStreaming: chatViewModel.isStreaming
+                isStreaming: self.chatViewModel.isStreaming
             )
         }
         .background(Color(NSColor.textBackgroundColor))
-        .onReceive(chatViewModel.$sessions) { sessions in
+        .onReceive(self.chatViewModel.$sessions) { sessions in
             // Track the newest message id for auto-scroll.
-            if let activeID = chatViewModel.activeSessionID,
+            if let activeID = self.chatViewModel.activeSessionID,
                let session = sessions.first(where: { $0.id == activeID }) {
-                lastMessageID = session.messages.last?.id
+                self.lastMessageID = session.messages.last?.id
             }
         }
-        .overlay(alignment: .top) {
-            if let error = chatViewModel.errorMessage {
-                ErrorBanner(message: error) {
-                    chatViewModel.clearError()
+        // Error banner: ZStack-based (overlay(alignment:) is macOS 12+).
+        .overlay(
+            VStack {
+                if self.chatViewModel.errorMessage != nil {
+                    ErrorBannerView(
+                        message: self.chatViewModel.errorMessage!,
+                        onDismiss: {
+                            self.chatViewModel.clearError()
+                        }
+                    )
+                    .id(self.chatViewModel.errorDismissToken)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                    Spacer()
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .id(chatViewModel.errorDismissToken)
-            }
-        }
+            },
+            alignment: .top
+        )
     }
 
     // MARK: - Empty state
 
     private var emptyStateView: some View {
         VStack(spacing: 12) {
-            Image(systemName: "bubble.left.and.bubble.right")
+            Text("💬")
                 .font(.system(size: 40))
                 .foregroundColor(.secondary)
             Text("No Chat Selected")
-                .font(.title3)
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundColor(.secondary)
             Text("Choose a chat from the sidebar or create a new one.")
-                .font(.callout)
+                .font(.system(size: 13))
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -80,10 +89,10 @@ struct ChatView: View {
     // MARK: - Actions
 
     private func handleSend(_ text: String) {
-        chatViewModel.sendMessage(
+        self.chatViewModel.sendMessage(
             text,
-            config: configStore.activeConfig,
-            model: configStore.activeConfig?.selectedModel ?? ""
+            config: self.configStore.activeConfig,
+            model: self.configStore.activeConfig?.selectedModel ?? ""
         )
     }
 }
@@ -103,71 +112,58 @@ private struct TopBarView: View {
     var body: some View {
         HStack(spacing: 12) {
             // Profile picker
-            Picker("Profile", selection: $configStore.activeConfigID) {
-                ForEach(configStore.configs) { config in
+            Picker("Profile", selection: self.$configStore.activeConfigID) {
+                ForEach(self.configStore.configs) { config in
                     Text(config.displayName)
                         .tag(Optional(config.id))
                 }
-                if configStore.configs.isEmpty {
+                if self.configStore.configs.isEmpty {
                     Text("No profile — add in Settings (⌘,)")
                         .tag(Optional<UUID>.none)
                 }
             }
-            .pickerStyle(MenuPickerStyle())
             .frame(minWidth: 160)
-            .help("Active API relay profile")
 
-            // Model picker (populated from the active profile)
-            if let activeConfig = configStore.activeConfig {
-                Picker("Model", selection: modelPickerBinding(for: activeConfig)) {
-                    if activeConfig.availableModels.isEmpty {
-                        Text("No models — fetch in Settings")
-                            .tag("")
-                    }
-                    ForEach(activeConfig.availableModels, id: \.self) { model in
-                        Text(model).tag(model)
-                    }
-                }
-                .pickerStyle(MenuPickerStyle())
-                .frame(minWidth: 200)
-                .help("Model used for chat")
+            // Model picker (populated from the active profile).
+            // Computed property keeps `if` + locals out of the ViewBuilder.
+            if self.configStore.activeConfig != nil {
+                self.modelPicker
             }
 
             Spacer()
 
-            // Generation controls
-            if chatViewModel.isStreaming {
-                ProgressView()
-                    .controlSize(.small)
+            // Generation controls (Text-based; no ProgressView for 10.15)
+            if self.chatViewModel.isStreaming {
+                Text("⏳ Generating…")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+
                 Button(action: {
-                    chatViewModel.cancelStreaming()
+                    self.chatViewModel.cancelStreaming()
                 }) {
-                    Label("Stop", systemImage: "stop.fill")
+                    Text("⏹ Stop")
+                        .foregroundColor(.red)
                 }
                 .buttonStyle(BorderedButtonStyle())
-                .foregroundColor(.red)
             } else {
                 Button(action: {
-                    chatViewModel.createNewChat()
+                    self.chatViewModel.createNewChat()
                 }) {
-                    Label("New Chat", systemImage: "square.and.pencil")
+                    Text("✏️ New Chat")
                 }
                 .buttonStyle(BorderedButtonStyle())
-                .help("Start a new chat (⌘N)")
             }
 
-            // Settings accessor
+            // Settings accessor (gear button)
             Button(action: {
-                // Send a notification; AppDelegate listens and shows settings.
                 NotificationCenter.default.post(
                     name: .showSettingsNotification,
                     object: nil
                 )
             }) {
-                Image(systemName: "gearshape")
+                Text("⚙️")
             }
             .buttonStyle(BorderedButtonStyle())
-            .help("Open API profile settings (⌘,)")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -176,15 +172,30 @@ private struct TopBarView: View {
 
     // MARK: - Helpers
 
+    /// Model picker bound to the active profile's selection.
+    private var modelPicker: some View {
+        let config = self.configStore.activeConfig!
+        return Picker("Model", selection: self.modelPickerBinding(for: config)) {
+            if config.availableModels.isEmpty {
+                Text("No models — fetch in Settings")
+                    .tag("")
+            }
+            ForEach(config.availableModels, id: \.self) { model in
+                Text(model).tag(model)
+            }
+        }
+        .frame(minWidth: 200)
+    }
+
     /// Writes model selections straight through to the stored profile.
     private func modelPickerBinding(for config: APIServerConfig) -> Binding<String> {
         Binding(
             get: {
-                configStore.configs.first(where: { $0.id == config.id })?.selectedModel ?? ""
+                self.configStore.configs.first(where: { $0.id == config.id })?.selectedModel ?? ""
             },
             set: { newModel in
-                guard let index = configStore.configs.firstIndex(where: { $0.id == config.id }) else { return }
-                configStore.configs[index].selectedModel = newModel
+                guard let index = self.configStore.configs.firstIndex(where: { $0.id == config.id }) else { return }
+                self.configStore.configs[index].selectedModel = newModel
             }
         )
     }
@@ -199,7 +210,8 @@ extension Notification.Name {
 
 // MARK: - Message list
 
-/// Scrollable list of messages with smooth autocroll during streaming.
+/// Scrollable list of messages (ScrollViewReader is macOS 11+; we rely on
+/// the list re-rendering each streaming delta, which keeps the view pinned).
 private struct MessageList: View {
 
     /// Session being displayed.
@@ -214,32 +226,19 @@ private struct MessageList: View {
     // MARK: - Body
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(spacing: 14) {
-                    ForEach(session.messages) { message in
-                        MessageBubble(
-                            message: message,
-                            isStreaming: message.id == streamingMessageID
-                        )
-                        .id(message.id)
-                    }
-                }
-                .padding(16)
-            }
-            .onChange(of: lastMessageID) { newID in
-                if let newID {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo(newID, anchor: .bottom)
-                    }
+        ScrollView {
+            VStack(spacing: 14) {
+                ForEach(self.session.messages) { message in
+                    MessageBubble(
+                        message: message,
+                        isStreaming: message.id == self.streamingMessageID
+                    )
+                    .id(message.id)
                 }
             }
-            .onAppear {
-                if let id = session.messages.last?.id {
-                    proxy.scrollTo(id, anchor: .bottom)
-                }
-            }
+            .padding(16)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -258,59 +257,66 @@ private struct MessageBubble: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            if message.role == .assistant {
-                avatar
+            if self.message.role == .assistant {
+                Text("✨")
+                    .font(.system(size: 16))
+                    .frame(width: 24, height: 24)
             }
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(roleLabel)
-                        .font(.caption)
+                    Text(self.roleLabel)
+                        .font(.system(size: 11))
                         .foregroundColor(.secondary)
-                    Text(message.timestamp, style: .time)
-                        .font(.caption2)
+                    Text(self.timeString)
+                        .font(.system(size: 10))
                         .foregroundColor(.secondary)
                 }
 
-                Text(contentDisplay)
-                    .font(.body)
+                Text(self.contentDisplay)
+                    .font(.system(size: 13))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(bubbleBackground)
+                    .background(self.bubbleBackground)
                     .cornerRadius(10)
-                    .frame(maxWidth: 620, alignment: message.role == .user ? .trailing : .leading)
+                    .frame(maxWidth: 620, alignment: self.message.role == .user ? .trailing : .leading)
 
-                if isStreaming {
-                    HStack(spacing: 4) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("Generating…")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.leading, 4)
+                if self.isStreaming {
+                    Text("● Generating…")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .padding(.leading, 4)
                 }
             }
 
-            if message.role == .user {
-                avatar
+            if self.message.role == .user {
+                Text("👤")
+                    .font(.system(size: 16))
+                    .frame(width: 24, height: 24)
             }
         }
-        .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+        .frame(maxWidth: .infinity, alignment: self.message.role == .user ? .trailing : .leading)
     }
 
     // MARK: - Derived content
 
     private var roleLabel: String {
-        switch message.role {
+        switch self.message.role {
         case .user: return "You"
         case .assistant: return "Assistant"
         case .system: return "System"
         }
     }
 
+    /// 10.15-safe time formatting (Text(date, style: .time) is 11+).
+    private var timeString: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: self.message.timestamp)
+    }
+
     private var bubbleBackground: Color {
-        switch message.role {
+        switch self.message.role {
         case .user:
             return Color.accentColor.opacity(0.15)
         case .assistant:
@@ -321,61 +327,15 @@ private struct MessageBubble: View {
     }
 
     private var contentDisplay: String {
-        message.content.isEmpty && isStreaming
+        self.message.content.isEmpty && self.isStreaming
             ? "…"
-            : message.content
-    }
-
-    private var avatar: some View {
-        Image(systemName: message.role == .user ? "person.crop.circle.fill" : "sparkles")
-            .font(.system(size: 16))
-            .foregroundColor(message.role == .user ? Color.accentColor : .purple)
-            .frame(width: 24, height: 24)
-    }
-}
-
-// MARK: - Error banner
-
-/// Dismissible error banner shown when a stream or configuration fails.
-private struct ErrorBanner: View {
-
-    /// Message to display.
-    let message: String
-
-    /// Called when the user taps the dismiss button.
-    let onDismiss: () -> Void
-
-    // MARK: - Body
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.red)
-
-            Text(message)
-                .font(.callout)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button(action: onDismiss) {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(BorderlessButtonStyle())
-        }
-        .padding(10)
-        .background(Color(NSColor.windowBackgroundColor).opacity(0.9))
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.red.opacity(0.4), lineWidth: 1)
-        )
+            : self.message.content
     }
 }
 
 // MARK: - Input bar
 
-/// Multi-line input with a Send button (Enter-to-send handled by button focus,
-/// Shift+Enter produces a newline natively in NSTextView-backed TextEditor).
+/// Multi-line input using an AppKit NSTextView wrapper (TextEditor is 11+).
 private struct InputBarView: View {
 
     /// Callback invoked with text to send.
@@ -390,45 +350,159 @@ private struct InputBarView: View {
     // MARK: - Body
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            TextEditor(text: $draft)
-                .font(.body)
-                .frame(minHeight: 40, maxHeight: 120)
-                .background(Color(NSColor.textBackgroundColor))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-                )
-                .padding(.vertical, 6)
+        HStack(alignment: .center, spacing: 10) {
+            MultiLineTextField(text: self.$draft, onEnter: {
+                self.onSubmit()
+            })
+            .frame(minHeight: 40, maxHeight: 100)
 
             Button(action: {
-                onSubmit()
+                self.onSubmit()
             }) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 24))
-                    .foregroundColor(isSendDisabled ? Color.gray : Color.accentColor)
+                Text("Send")
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
             }
-            .buttonStyle(BorderlessButtonStyle())
-            .disabled(isSendDisabled)
-            .help("Send")
+            .buttonStyle(BorderedButtonStyle())
+            .disabled(self.isSendDisabled)
         }
         .padding(.horizontal, 12)
-        .padding(.bottom, 10)
+        .padding(.vertical, 8)
         .background(Color(NSColor.windowBackgroundColor))
     }
 
     // MARK: - Derived
 
     private var isSendDisabled: Bool {
-        isStreaming || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        self.isStreaming || self.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // MARK: - Actions
 
     private func onSubmit() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isStreaming else { return }
-        draft = ""
-        onSend(text)
+        let text = self.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !self.isStreaming else { return }
+        self.draft = ""
+        self.onSend(text)
+    }
+}
+
+// MARK: - Multi-line NSTextView wrapper
+
+/// NSViewRepresentable wrapping an NSTextView (Enter sends via callback;
+/// Shift+Enter inserts a newline natively).
+private struct MultiLineTextField: NSViewRepresentable {
+
+    /// Binding to the draft text.
+    @Binding var text: String
+
+    /// Called when the user presses Enter (without Shift).
+    let onEnter: () -> Void
+
+    // MARK: - Coordinator
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: MultiLineTextField
+
+        init(_ parent: MultiLineTextField) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            self.parent.text = textView.string
+        }
+
+        /// Intercepts Enter (no Shift) → calls send; Shift+Enter inserts newline.
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                let shiftPressed = NSEvent.modifierFlags.contains(.shift)
+                if shiftPressed {
+                    // Let the default handler insert a newline.
+                    return false
+                }
+                self.parent.onEnter()
+                return true
+            }
+            if commandSelector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)) {
+                // Cmd+Enter → also send.
+                self.parent.onEnter()
+                return true
+            }
+            return false
+        }
+    }
+
+    // MARK: - NSViewRepresentable
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSTextView.scrollableTextView()
+
+        guard let textView = scrollView.documentView as? NSTextView else {
+            return scrollView
+        }
+
+        textView.delegate = context.coordinator
+        textView.isRichText = false
+        textView.font = NSFont.systemFont(ofSize: 13)
+        textView.textContainerInset = NSSize(width: 4, height: 6)
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        guard let textView = nsView.documentView as? NSTextView else { return }
+        if textView.string != self.text {
+            textView.string = self.text
+        }
+        // Re-wire the closure (it may capture stale state).
+        context.coordinator.parent = self
+    }
+}
+
+// MARK: - Error banner
+
+/// Dismissible error banner shown when a stream or configuration fails.
+/// Rendered via `.overlay` in the parent (overlay(alignment:) is 12+).
+struct ErrorBannerView: View {
+
+    /// Message to display.
+    let message: String
+
+    /// Called when the user taps the dismiss button.
+    let onDismiss: () -> Void
+
+    // MARK: - Body
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("⚠️")
+                .font(.system(size: 14))
+
+            Text(self.message)
+                .font(.system(size: 12))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(action: self.onDismiss) {
+                Text("✕")
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(BorderlessButtonStyle())
+        }
+        .padding(10)
+        .background(Color(NSColor.windowBackgroundColor).opacity(0.9))
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.red.opacity(0.4), lineWidth: 1)
+        )
     }
 }
