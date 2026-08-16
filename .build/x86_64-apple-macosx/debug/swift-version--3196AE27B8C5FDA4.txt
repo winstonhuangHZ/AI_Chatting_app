@@ -1,2 +1,0 @@
-Apple Swift version 5.10 (swift-5.10-RELEASE)
-Target: x86_64-apple-macosx15.0

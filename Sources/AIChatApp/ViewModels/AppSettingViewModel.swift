@@ -4,8 +4,10 @@ import Combine
 /// Manages API relay profiles: creation, editing, deletion, activation,
 /// connection testing, and model-list fetching.
 ///
-/// Uses the callback-based `OpenAIService` (no async/await) so it compiles
-/// with older SDKs. All network completions arrive on the main queue.
+/// Modern Swift Concurrency implementation:
+/// - `@MainActor` keeps all published state on the main thread.
+/// - Network calls `await` the actor-isolated `OpenAIService`.
+@MainActor
 final class AppSettingViewModel: ObservableObject {
 
     // MARK: - Dependencies
@@ -51,7 +53,7 @@ final class AppSettingViewModel: ObservableObject {
         self.configs = configStore.configs
         self.activeConfigID = configStore.activeConfigID
 
-        // Mirror store changes into this VM for one-way data flow.
+        // Mirror store changes into this VM (one-way: store → VM).
         configStore.$configs
             .sink { [weak self] newConfigs in
                 self?.configs = newConfigs
@@ -94,31 +96,27 @@ final class AppSettingViewModel: ObservableObject {
 
     /// Performs a lightweight round-trip against `GET /v1/models` to verify
     /// credentials and reachability, without persisting the model list.
-    func testConnection(for config: APIServerConfig) {
+    func testConnection(for config: APIServerConfig) async {
         isTestingConnection = true
         statusMessage = nil
         statusIsError = false
+        defer { isTestingConnection = false }
 
-        service.fetchModels(config: config) { [weak self] result in
-            guard let self = self else { return }
-            self.isTestingConnection = false
-
-            switch result {
-            case .success(let (models, _)):
-                self.statusMessage = "✓ Connected — \(models.count) model(s) available."
-                self.statusIsError = false
-            case .failure(let error):
-                self.statusMessage = "✗ Failed — \(error.localizedDescription)"
-                self.statusIsError = true
-            }
+        do {
+            let (models, _) = try await service.fetchModels(config: config)
+            statusMessage = "✓ Connected — \(models.count) model(s) available."
+            statusIsError = false
+        } catch {
+            statusMessage = "✗ Failed — \(error.localizedDescription)"
+            statusIsError = true
         }
     }
 
     // MARK: - Model list
 
-    /// Fetches the model list for the given profile and persists it onto
-    /// the stored config.
-    func fetchModels(for configID: UUID) {
+    /// Fetches the model list + dynamic prices for the given profile and
+    /// persists them onto the stored config.
+    func fetchModels(for configID: UUID) async {
         guard let config = configs.first(where: { $0.id == configID }) else {
             return
         }
@@ -126,43 +124,40 @@ final class AppSettingViewModel: ObservableObject {
         isLoadingModels = true
         statusMessage = nil
         statusIsError = false
+        defer { isLoadingModels = false }
 
-        service.fetchModels(config: config) { [weak self] result in
-            guard let self = self else { return }
-            self.isLoadingModels = false
+        do {
+            let (models, prices) = try await service.fetchModels(config: config)
 
-            switch result {
-            case .success(let (models, prices)):
-                // Normalize the base URL and persist models + dynamic prices.
-                guard let normalized = try? self.service.normalizedBaseURL(from: config.baseURL) else {
-                    self.statusMessage = "Invalid base URL."
-                    self.statusIsError = true
-                    return
-                }
-
-                self.configStore.updateModels(
-                    models,
-                    prices: prices,
-                    normalizedBaseURL: normalized,
-                    for: configID
-                )
-
-                // Auto-select the first model if none is chosen yet.
-                if let updated = self.configs.first(where: { $0.id == configID }),
-                   updated.selectedModel.isEmpty,
-                   let first = models.first {
-                    var selected = updated
-                    selected.selectedModel = first
-                    self.configStore.update(selected)
-                }
-
-                self.statusMessage = "Loaded \(models.count) model(s)."
-                self.statusIsError = false
-
-            case .failure(let error):
-                self.statusMessage = error.localizedDescription
-                self.statusIsError = true
+            // Normalize the base URL and persist models + dynamic prices.
+            guard let normalized = try? service.normalizedBaseURL(from: config.baseURL) else {
+                statusMessage = "Invalid base URL."
+                statusIsError = true
+                return
             }
+
+            configStore.updateModels(
+                models,
+                prices: prices,
+                normalizedBaseURL: normalized,
+                for: configID
+            )
+
+            // Auto-select the first model if none is chosen yet.
+            if let updated = configs.first(where: { $0.id == configID }),
+               updated.selectedModel.isEmpty,
+               let first = models.first {
+                var selected = updated
+                selected.selectedModel = first
+                configStore.update(selected)
+            }
+
+            statusMessage = "Loaded \(models.count) model(s)."
+            statusIsError = false
+
+        } catch {
+            statusMessage = error.localizedDescription
+            statusIsError = true
         }
     }
 

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Root container: a two-pane split layout (10.15-compatible HSplitView)
-/// with the session sidebar and the chat detail pane.
+/// Root container: a modern `NavigationSplitView` (macOS 14+) with the
+/// session sidebar and the chat detail pane.
 struct ContentView: View {
 
     // MARK: - Environment
@@ -11,11 +11,13 @@ struct ContentView: View {
     // MARK: - Body
 
     var body: some View {
-        HSplitView {
+        NavigationSplitView {
             SidebarView()
-                .frame(minWidth: 180, idealWidth: 220, maxWidth: 320)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 240)
+        } detail: {
             ChatView()
-                .frame(minWidth: 420)
         }
+        .navigationSplitViewStyle(.balanced)
+        .navigationTitle(chatViewModel.activeSession?.title ?? "AI Chat")
     }
 }

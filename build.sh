@@ -1,104 +1,82 @@
 #!/usr/bin/env bash
-# Build & package the AI Chat macOS app using swiftc directly (SPM-free),
-# compatible with old toolchains that predate @main / App / WindowGroup.
+# Build & package the AI Chat macOS app (modern Swift / SwiftUI, macOS 14+).
+#
+# Requires Xcode 15+ / Swift 5.9+ (this project uses Swift Concurrency,
+# NavigationSplitView, @main / App, and other macOS 14-only APIs).
 #
 # Usage:
-#   ./build.sh                     # build x86_64 (or arm64 on Apple Silicon)
-#   ARCHS="x86_64" ./build.sh      # force architecture
+#   ./build.sh                    # SPM build + package .app
+#   ./build.sh --package          # also produce dist/AIChatApp.app bundle
+#   ./build.sh --run              # build and launch the app
 set -euo pipefail
 
 APP_NAME="AIChatApp"
-BUNDLE_ID="com.aichat.app"
 BUILD_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC_DIR="$BUILD_ROOT/Sources"
 DIST_DIR="$BUILD_ROOT/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
-CONTENTS="$APP_DIR/Contents"
-MACOS_DIR="$CONTENTS/MacOS"
-RESOURCES_DIR="$CONTENTS/Resources"
-SRC_DIR="$BUILD_ROOT/Sources"
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
 
-# Architectures to build. Override with: ARCHS="x86_64" ./build.sh
-ARCHS="${ARCHS:-x86_64}"
-MIN_MACOS="10.15"
+GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; NC='\033[0m'
+info()  { echo -e "${GREEN}==>${NC} $1"; }
+warn()  { echo -e "${YELLOW}WARN:${NC} $1"; }
+die()   { echo -e "${RED}ERROR:${NC} $1" >&2; exit 1; }
 
-GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
-info() { echo -e "${GREEN}==>${NC} $1"; }
-warn() { echo -e "${YELLOW}WARN:${NC} $1"; }
+# ---------------------------------------------------------------------------
+# Toolchain check
+# ---------------------------------------------------------------------------
+SWIFT_VERSION_OK=$(swift --version 2>/dev/null | grep -cE "Swift version (5\.[9]|[6-9]\.)" || true)
+if [ "$SWIFT_VERSION_OK" -eq 0 ]; then
+  die "This project requires macOS 14+ SDK & Swift 5.9+ (Xcode 15+).\n
+       Found: $(swift --version 2>/dev/null | head -1)\n
+       Please build with Xcode 15+ (open Package.swift in Xcode, or run:\n
+       swift build)
+  "
+fi
 
-info "AI Chat — build & package script"
-info "Target architectures: $ARCHS"
-info "Cleaning previous build..."
-rm -rf "$APP_DIR"
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
+info "Building $APP_NAME (macOS 14+, Swift Concurrency)..."
 
-info "Compiling Swift sources with swiftc..."
-SWIFT_FILES=$(find "$SRC_DIR" -name '*.swift' | sort)
+# Build (debug) via SwiftPM.
+swift build 2>&1 | tail -20
 
-# Use the system toolchain (Swift 5.2 bundled with Command Line Tools).
-# This is the same approach music_alarm uses — it compiles fine with the
-# legacy "macosx10.15" triple and the system SDK.
-SWIFTC="swiftc"
-info "Using compiler: $SWIFTC"
-
-compile_arch() {
-  local arch="$1" target
-  # Legacy triple compatible with the system SDK.
-  for t in "$arch-apple-macosx${MIN_MACOS}" "$arch-apple-macosx10.14"; do
-    if "$SWIFTC" -O -swift-version 5 \
-        -target "$t" \
-        -framework SwiftUI \
-        -framework AppKit \
-        -framework Combine \
-        -o "$TMP_DIR/$APP_NAME-$arch" \
-        $SWIFT_FILES 2>"$TMP_DIR/$arch.err"; then
-      echo "   [$arch] compiled OK (target: $t)."
-      return 0
-    fi
-  done
-  echo "   [$arch] FAILED:" >&2
-  sed 's/^/       /' "$TMP_DIR/$arch.err" >&2 || true
-  return 1
-}
-
-THIN_BINARIES=()
-for arch in $ARCHS; do
-  if compile_arch "$arch"; then
-    THIN_BINARIES+=("$TMP_DIR/$APP_NAME-$arch")
-  else
-    warn "Compilation failed for $arch; skipping this architecture."
-  fi
+# ---------------------------------------------------------------------------
+# Optional .app bundling (--package, --run)
+# ---------------------------------------------------------------------------
+DO_PACKAGE=0
+DO_RUN=0
+for arg in "$@"; do
+  case "$arg" in
+    --package) DO_PACKAGE=1 ;;
+    --run)     DO_PACKAGE=1; DO_RUN=1 ;;
+  esac
 done
 
-if [ "${#THIN_BINARIES[@]}" -eq 0 ]; then
-  echo "ERROR: no architecture compiled successfully." >&2
-  exit 1
-fi
+if [ "$DO_PACKAGE" -eq 1 ]; then
+  info "Packaging .app bundle..."
+  rm -rf "$APP_DIR"
+  mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
-if [ "${#THIN_BINARIES[@]}" -eq 1 ]; then
-  warn "Only one architecture built (${THIN_BINARIES[0]##*-}); this is NOT a universal binary."
-  cp "${THIN_BINARIES[0]}" "$MACOS_DIR/$APP_NAME"
+  # Locate the SPM-built binary.
+  BIN_PATH="$BUILD_ROOT/.build/debug/$APP_NAME"
+  if [ ! -f "$BIN_PATH" ]; then
+    die "Binary not found at $BIN_PATH — did 'swift build' succeed?"
+  fi
+  cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/$APP_NAME"
+  cp "$BUILD_ROOT/Info.plist" "$APP_DIR/Contents/Info.plist"
+
+  # Ad-hoc code signing so the app launches locally.
+  codesign --force --deep --sign - "$APP_DIR" 2>/dev/null || \
+    warn "codesign failed; app is still runnable locally."
+
+  echo ""
+  echo -e "${GREEN}Build complete!${NC}"
+  echo "   App:     $APP_DIR"
+  echo "   Binary:  $APP_DIR/Contents/MacOS/$APP_NAME"
+
+  if [ "$DO_RUN" -eq 1 ]; then
+    open "$APP_DIR"
+  fi
 else
-  info "Merging universal binary with lipo..."
-  lipo -create "${THIN_BINARIES[@]}" -output "$MACOS_DIR/$APP_NAME"
-  lipo -info "$MACOS_DIR/$APP_NAME" || true
+  echo ""
+  info "Build OK (debug)."
+  echo "   Run with Xcode, or:  ./build.sh --package --run"
 fi
-echo "   Binary: $MACOS_DIR/$APP_NAME"
-
-info "Copying Info.plist..."
-cp "$BUILD_ROOT/Info.plist" "$CONTENTS/Info.plist"
-
-info "Ad-hoc code signing..."
-if codesign --force --deep --sign - "$APP_DIR" 2>/dev/null; then
-  echo "   Signed OK."
-else
-  warn "codesign failed; app is still runnable locally."
-fi
-
-echo ""
-echo -e "${GREEN}Build complete!${NC}"
-echo "   App:     $APP_DIR"
-echo "   Binary:  $MACOS_DIR/$APP_NAME"
-echo ""
-echo "   To launch:  open \"$APP_DIR\""
