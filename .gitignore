@@ -1,0 +1,13 @@
+# SwiftPM 构建产物
+.build/
+
+# 应用打包产物
+dist/
+
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+DerivedData/
+*.xcuserstate
