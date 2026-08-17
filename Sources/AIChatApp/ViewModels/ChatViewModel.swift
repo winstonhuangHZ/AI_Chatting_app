@@ -186,20 +186,35 @@ final class ChatViewModel: ObservableObject {
                 )
 
                 var accumulated = ""
+                // Throttle UI updates so tiny SSE chunks don't trigger a full
+                // SwiftUI redraw every time. We flush at most every 50 ms.
+                var lastFlush = ContinuousClock.now
                 for try await delta in stream {
                     // If the user switched sessions mid-stream, stop writing.
                     guard self.activeSessionID == sessionID else {
                         self.cancelStreaming()
                         return
                     }
-                    accumulated += delta
-                    // Render Markdown without the invisible personalization
-                    // wrapper even while streaming.
-                    self.sessionStore.updateLastAssistantContent(
-                        Self.stripPersonalization(from: accumulated),
-                        in: sessionID
-                    )
+                    // `bytes.lines` splits on \n and drops the newline; we
+                    // must re-add it so Markdown blocks (tables, lists,
+                    // code fences) stay intact across SSE chunks.
+                    accumulated += delta + "\n"
+
+                    // 50 ms throttle: only flush to the UI when enough time
+                    // has passed (and always flush on the final iteration).
+                    if lastFlush.duration(to: .now) > .milliseconds(50) {
+                        lastFlush = .now
+                        self.sessionStore.updateLastAssistantContent(
+                            Self.stripPersonalization(from: accumulated),
+                            in: sessionID
+                        )
+                    }
                 }
+                // Always flush the final accumulated text after the stream ends.
+                self.sessionStore.updateLastAssistantContent(
+                    Self.stripPersonalization(from: accumulated),
+                    in: sessionID
+                )
 
                 // After the full reply arrives, parse & store any new
                 // personalization the model detected.

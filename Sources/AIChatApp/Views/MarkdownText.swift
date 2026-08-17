@@ -1,48 +1,36 @@
 import SwiftUI
+import MarkdownUI
 
-/// Lightweight Markdown renderer backed by SwiftUI's native
-/// `AttributedString(markdown:)` (macOS 12+). Renders headings, bold, italic,
-/// code, and links from assistant messages.
+/// Lightweight GFM (GitHub Flavored Markdown) renderer built on
+/// `swift-markdown-ui` (MarkdownUI). Supports tables, headings, code blocks,
+/// lists, links — unlike Apple's native `Text(LocalizedStringKey)`, which
+/// does not render Markdown tables.
 struct MarkdownText: View {
 
     /// Raw Markdown source.
     let text: String
 
-    /// Base font size.
+    /// Base font size for the rendered content.
     var fontSize: CGFloat = 13
 
     // MARK: - Body
 
     var body: some View {
-        if let attributed = try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .full)
-        ) {
-            Text(styleCodeRuns(attributed))
-                .textSelection(.enabled)
-        } else {
-            // Input is not parseable Markdown — show as plain text.
-            Text(text)
-                .font(.system(size: fontSize))
+        Markdown(
+            // The block quote prefix instructs the parser to keep the raw
+            // source untouched (no trimming of newlines).
+            """
+            \(text)
+            """,
+            baseURL: nil
+        )
+        .markdownTextStyle {
+            FontSize(fontSize)
         }
-    }
-
-    // MARK: - Helpers
-
-    /// Pre-processes the attributed string so code runs use a monospaced font
-    /// and a light background. This runs *before* the ViewBuilder so no
-    /// control flow is needed inside it.
-    private func styleCodeRuns(_ attributed: AttributedString) -> AttributedString {
-        var styled = attributed
-        styled.font = .systemFont(ofSize: fontSize)
-
-        for run in styled.runs {
-            if run.inlinePresentationIntent?.contains(.code) == true {
-                styled[run.range].font = .monospacedSystemFont(ofSize: fontSize - 1, weight: .regular)
-                styled[run.range].backgroundColor = .gray.opacity(0.15)
-            }
+        .markdownBlockStyle(\.table) { configuration in
+            configuration.label
+                .markdownMargin(top: .em(0.5), bottom: .em(0.5))
         }
-
-        return styled
+        .textSelection(.enabled)
     }
 }
