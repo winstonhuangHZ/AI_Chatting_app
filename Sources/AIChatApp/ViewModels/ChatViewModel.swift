@@ -32,6 +32,14 @@ final class ChatViewModel: ObservableObject {
     /// `true` while a stream request is in flight.
     @Published var isStreaming = false
 
+    /// `true` once the first non-empty SSE token has arrived while streaming.
+    ///
+    /// Experimental deferred-render mode: we still receive tokens over SSE
+    /// (so time-to-first-token stays low) but do NOT render them one-by-one
+    /// into the bubble. Instead we show "generating…" until the stream ends,
+    /// then write the full text once and let Markdown render a single time.
+    @Published var hasReceivedFirstToken = false
+
     /// User-facing error banner text (nil hides the banner).
     @Published var errorMessage: String?
 
@@ -320,10 +328,13 @@ final class ChatViewModel: ObservableObject {
                     messages: history
                 )
 
+                // EXPERIMENTAL DEFERRED RENDER:
+                // accumulate the whole reply over SSE but do NOT touch the
+                // bubble's content while streaming (no per-delta redraws).
+                // The placeholder stays empty showing "generating…"; once the
+                // stream finishes we write the full text in one update and
+                // Markdown renders exactly once.
                 var accumulated = ""
-                // Throttle UI updates so tiny SSE chunks don't trigger a full
-                // SwiftUI redraw every time. We flush at most every 100 ms.
-                var lastFlush = ContinuousClock.now
                 for try await delta in stream {
                     // If the user switched sessions mid-stream, stop writing.
                     guard self.activeSessionID == sessionID else {
@@ -335,21 +346,18 @@ final class ChatViewModel: ObservableObject {
                     // code fences) stay intact across SSE chunks.
                     accumulated += delta + "\n"
 
-                    // 100 ms throttle: only flush to the UI when enough time
-                    // has passed (and always flush on the final iteration).
-                    if lastFlush.duration(to: .now) > .milliseconds(100) {
-                        lastFlush = .now
-                        self.sessionStore.updateLastAssistantContent(
-                            Self.stripPersonalization(from: accumulated),
-                            in: sessionID
-                        )
+                    // Signal the UI once we actually have content.
+                    if !self.hasReceivedFirstToken
+                        && !accumulated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        self.hasReceivedFirstToken = true
                     }
                 }
-                // Always flush the final accumulated text after the stream ends.
+                // One-shot render: write the full accumulated text once.
                 self.sessionStore.updateLastAssistantContent(
                     Self.stripPersonalization(from: accumulated),
                     in: sessionID
                 )
+                self.hasReceivedFirstToken = false
 
                 // After the full reply arrives, parse & store any new
                 // personalization the model detected.
@@ -374,12 +382,14 @@ final class ChatViewModel: ObservableObject {
                 self.isStreaming = false
                 self.streamTask = nil
                 self.streamingAssistantID = nil
+                self.hasReceivedFirstToken = false
 
             } catch {
                 self.sessionStore.forcePersist()
                 self.isStreaming = false
                 self.streamTask = nil
                 self.streamingAssistantID = nil
+                self.hasReceivedFirstToken = false
 
                 // Remove the placeholder assistant message if nothing arrived.
                 let partial = self.activeSession?
@@ -411,6 +421,7 @@ final class ChatViewModel: ObservableObject {
         streamTask?.cancel()
         streamTask = nil
         isStreaming = false
+        hasReceivedFirstToken = false
         streamingAssistantID = nil
     }
 

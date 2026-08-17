@@ -33,6 +33,7 @@ struct ChatView: View {
                 MessageList(
                     session: session,
                     streamingMessageID: chatViewModel.streamingAssistantID,
+                    hasReceivedFirstToken: chatViewModel.hasReceivedFirstToken,
                     lastMessageID: $lastMessageID
                 )
             } else {
@@ -201,6 +202,9 @@ private struct MessageList: View {
     /// The id of the assistant message currently being streamed.
     let streamingMessageID: UUID?
 
+    /// `true` once streaming has yielded content (deferred-render indicator).
+    let hasReceivedFirstToken: Bool
+
     /// Binding updated to the newest message id (drives autoscroll).
     @Binding var lastMessageID: UUID?
 
@@ -213,7 +217,8 @@ private struct MessageList: View {
                     ForEach(session.messages) { message in
                         MessageBubble(
                             message: message,
-                            isStreaming: message.id == streamingMessageID
+                            isStreaming: message.id == streamingMessageID,
+                            hasReceivedFirstToken: hasReceivedFirstToken
                         )
                         .id(message.id)
                     }
@@ -252,6 +257,9 @@ private struct MessageBubble: View {
 
     /// `true` while this assistant message is being streamed.
     let isStreaming: Bool
+
+    /// `true` once streaming has yielded the first content token (deferred-render).
+    let hasReceivedFirstToken: Bool
 
     // MARK: - Environment
 
@@ -309,7 +317,10 @@ private struct MessageBubble: View {
                 if isStreaming {
                     HStack(spacing: 4) {
                         ProgressView().controlSize(.small)
-                        Text(L("generating"))
+                        // Deferred-render experiment: before the first token
+                        // arrives show "Waiting for response…"; once tokens are
+                        // flowing show "Generating…" until the stream ends.
+                        Text(L(hasReceivedFirstToken ? "generating" : "generating.waiting"))
                             .appearanceFont(appearance.fontPreset, size: 11)
                             .foregroundStyle(.secondary)
                     }
@@ -434,7 +445,10 @@ private struct MessageBubble: View {
     }
 
     private var contentDisplay: String {
-        message.content.isEmpty && isStreaming ? "…" : message.content
+        // Deferred-render mode: while streaming the bubble content stays empty
+        // (the full reply is written once at the end), so do NOT show the "…"
+        // placeholder that suited the old token-by-token renderer.
+        message.content.isEmpty && isStreaming ? "" : message.content
     }
 
     private var avatar: some View {
