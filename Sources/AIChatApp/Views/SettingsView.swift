@@ -65,74 +65,79 @@ private struct ProfileListView: View {
     let onEdit: (APIServerConfig) -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(L("api.relay.profiles")).font(.title2.bold())
-                Spacer()
-                Button(action: onAdd) { Label(L("add.profile"), systemImage: "plus") }
-                    .buttonStyle(.borderedProminent)
-            }
-            .padding(16)
-
-            Divider()
-
-            if configStore.configs.isEmpty {
-                ContentUnavailableView {
-                    Label(L("no.profiles"), systemImage: "network.slash")
-                } description: {
-                    Text(L("no.profiles.description"))
-                } actions: {
-                    Button(L("add.profile"), action: onAdd)
+        // 外层 ScrollView：保证所有分区（外观/备份/语言）在窗口缩小时仍可滚动到。
+        ScrollView {
+            VStack(spacing: 0) {
+                HStack {
+                    Text(L("api.relay.profiles")).font(.title2.bold())
+                    Spacer()
+                    Button(action: onAdd) { Label(L("add.profile"), systemImage: "plus") }
                         .buttonStyle(.borderedProminent)
                 }
-                .frame(maxHeight: .infinity)
-            } else {
-                List(configStore.configs) { config in
-                    ProfileRow(
-                        config: config,
-                        isActive: configStore.activeConfigID == config.id,
-                        isTesting: appSettingViewModel.isTestingConnection
-                            && configStore.activeConfigID == config.id,
-                        onActivate: { configStore.activeConfigID = config.id },
-                        onEdit: { onEdit(config) },
-                        onDelete: { appSettingViewModel.delete(config) },
-                        onFetchModels: {
-                            Task { await appSettingViewModel.fetchModels(for: config.id) }
-                        },
-                        onTest: {
-                            Task { await appSettingViewModel.testConnection(for: config) }
-                        }
-                    )
+                .padding(16)
+
+                Divider()
+
+                if configStore.configs.isEmpty {
+                    ContentUnavailableView {
+                        Label(L("no.profiles"), systemImage: "network.slash")
+                    } description: {
+                        Text(L("no.profiles.description"))
+                    } actions: {
+                        Button(L("add.profile"), action: onAdd)
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .frame(height: 220)
+                } else {
+                    // 配置列表：多条时限制高度（外层 ScrollView 可继续滚动下面的分区）。
+                    List(configStore.configs) { config in
+                        ProfileRow(
+                            config: config,
+                            isActive: configStore.activeConfigID == config.id,
+                            isTesting: appSettingViewModel.isTestingConnection
+                                && configStore.activeConfigID == config.id,
+                            onActivate: { configStore.activeConfigID = config.id },
+                            onEdit: { onEdit(config) },
+                            onDelete: { appSettingViewModel.delete(config) },
+                            onFetchModels: {
+                                Task { await appSettingViewModel.fetchModels(for: config.id) }
+                            },
+                            onTest: {
+                                Task { await appSettingViewModel.testConnection(for: config) }
+                            }
+                        )
+                    }
+                    .frame(height: CGFloat(min(configStore.configs.count, 4)) * 100 + 16)
                 }
+
+                Divider()
+
+                // User Profile section: learned personalization preferences.
+                UserProfileSection()
+                    .environmentObject(userProfileStore)
+
+                Divider()
+
+                // Interface appearance: font preset + size.
+                AppearancePickerView()
+                    .environmentObject(appearanceStore)
+
+                Divider()
+
+                // Backup & Restore: export/import all user data as ZIP.
+                BackupRestoreView()
+                    .environmentObject(configStore)
+                    .environmentObject(sessionStore)
+                    .environmentObject(userProfileStore)
+                    .environmentObject(appearanceStore)
+                    .environmentObject(LocalizationManager.shared)
+
+                Divider()
+
+                // Interface language picker (UN official languages).
+                LanguagePickerView()
+                    .environmentObject(LocalizationManager.shared)
             }
-
-            Divider()
-
-            // User Profile section: learned personalization preferences.
-            UserProfileSection()
-                .environmentObject(userProfileStore)
-
-            Divider()
-
-            // Interface appearance: font preset + size.
-            AppearancePickerView()
-                .environmentObject(appearanceStore)
-
-            Divider()
-
-            // Backup & Restore: export/import all user data as ZIP.
-            BackupRestoreView()
-                .environmentObject(configStore)
-                .environmentObject(sessionStore)
-                .environmentObject(userProfileStore)
-                .environmentObject(appearanceStore)
-                .environmentObject(LocalizationManager.shared)
-
-            Divider()
-
-            // Interface language picker (UN official languages).
-            LanguagePickerView()
-                .environmentObject(LocalizationManager.shared)
         }
     }
 }
@@ -185,6 +190,7 @@ private struct UserProfileSection: View {
             }
         }
         .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

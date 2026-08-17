@@ -78,5 +78,8 @@ struct AIChatApp: App {
                 .environmentObject(localizationManager)
                 .environmentObject(appearanceStore)
         }
+        // 默认开一个足够大的设置窗口，且允许用户自由缩放，
+        // 保证底层（外观/备份/语言）分区不会被窗口高度截断。
+        .defaultSize(width: 740, height: 680)
     }
 }
