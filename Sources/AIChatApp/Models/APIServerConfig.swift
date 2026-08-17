@@ -55,6 +55,10 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     /// request. The default preset tells the model Markdown is rendered.
     var systemPrompt: String
 
+    /// Whether replies stream token-by-token (true) or return as a single
+    /// response (false). Toggleable per profile.
+    var streamEnabled: Bool
+
     /// Multi-line text editor in settings; the default value helps the model
     /// produce nicely formatted Markdown the app will render.
     static let defaultSystemPrompt = """
@@ -88,7 +92,8 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         selectedModel: String = "",
         availableModels: [String] = [],
         modelPrices: [String: ModelPrice] = [:],
-        systemPrompt: String = APIServerConfig.defaultSystemPrompt
+        systemPrompt: String = APIServerConfig.defaultSystemPrompt,
+        streamEnabled: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -98,6 +103,7 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         self.availableModels = availableModels
         self.modelPrices = modelPrices
         self.systemPrompt = systemPrompt
+        self.streamEnabled = streamEnabled
     }
 
     /// A friendly display name for UI lists.
@@ -122,5 +128,6 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         modelPrices = try container.decodeIfPresent([String: ModelPrice].self, forKey: .modelPrices) ?? [:]
         systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
             ?? APIServerConfig.defaultSystemPrompt
+        streamEnabled = try container.decodeIfPresent(Bool.self, forKey: .streamEnabled) ?? true
     }
 }

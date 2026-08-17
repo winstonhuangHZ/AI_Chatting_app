@@ -42,11 +42,14 @@ struct ChatView: View {
 
             Divider()
 
-            // Live token counter + cost estimate for the active conversation.
+            // Live token counter + cost estimate for the *next* request —
+            // includes history + system prompt + user profile (all re-sent).
             UsageBarView(
                 messages: chatViewModel.activeMessages,
                 model: configStore.activeConfig?.selectedModel ?? "",
-                dynamicPrices: configStore.activeConfig?.modelPrices ?? [:]
+                dynamicPrices: configStore.activeConfig?.modelPrices ?? [:],
+                systemPrompt: configStore.activeConfig?.systemPrompt ?? "",
+                profileJSON: chatViewModel.userProfileStore.jsonPayload
             )
 
             InputBarView(
@@ -374,9 +377,11 @@ private struct UsageBarView: View {
     let messages: [ChatMessage]
     let model: String
     let dynamicPrices: [String: ModelPrice]
+    let systemPrompt: String
+    let profileJSON: String?
 
     private var summary: (input: Int, output: Int) {
-        TokenUsage.summarize(messages)
+        TokenUsage.summarize(messages, systemPrompt: systemPrompt, profileJSON: profileJSON)
     }
 
     private var estimatedCost: Double? {

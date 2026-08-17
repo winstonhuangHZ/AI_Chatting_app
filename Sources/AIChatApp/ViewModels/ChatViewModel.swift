@@ -177,8 +177,33 @@ final class ChatViewModel: ObservableObject {
             guard let self else { return }
 
             do {
-                // `streamChat` is an actor method — requires `await` (Swift 6
-                // strict concurrency). It returns an AsyncThrowingStream.
+                // In non-streaming mode we wait for the whole response at once.
+                if !configForRequest.streamEnabled {
+                    let reply = try await service.chatOnce(
+                        config: configForRequest,
+                        model: modelForRequest,
+                        messages: history
+                    )
+
+                    // Persist the full reply (with personalization stripped).
+                    let cleaned = Self.stripPersonalization(from: reply)
+                    self.sessionStore.updateLastAssistantContent(cleaned, in: sessionID)
+
+                    if let prefs = UserProfileStore.parse(from: reply) {
+                        for p in prefs {
+                            self.userProfileStore.upsert(category: p.category, value: p.value)
+                        }
+                    }
+
+                    self.isStreaming = false
+                    self.streamTask = nil
+                    self.streamingAssistantID = nil
+                    return
+                }
+
+                // Streaming mode: `streamChat` is an actor method — requires
+                // `await` (Swift 6 strict concurrency). It returns an
+                // AsyncThrowingStream.
                 let stream = try await service.streamChat(
                     config: configForRequest,
                     model: modelForRequest,

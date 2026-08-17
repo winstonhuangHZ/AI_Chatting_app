@@ -384,6 +384,108 @@ actor OpenAIService {
         }
     }
 
+    // MARK: - Non-streaming chat completion
+
+    /// Sends a chat completion with `stream: false` and returns the full text
+    /// once. Used when the user disables streaming in a profile.
+    func chatOnce(
+        config: APIServerConfig,
+        model: String,
+        messages: [ChatMessage]
+    ) async throws -> String {
+        let baseURL = try normalizedBaseURL(from: config.baseURL)
+        guard !config.apiKey.isEmpty else {
+            throw OpenAIServiceError.missingAPIKey
+        }
+        guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw OpenAIServiceError.transport("No model selected.")
+        }
+
+        let url = baseURL.appendingPathComponent("chat/completions")
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 300
+        request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let payloadMessages: [[String: Any]] = messages.map { message -> [String: Any] in
+            var result: [String: Any] = ["role": message.role.rawValue]
+            if !message.attachments.isEmpty {
+                var contentParts: [[String: Any]] = []
+                if !message.content.isEmpty {
+                    contentParts.append(["type": "text", "text": message.content])
+                }
+                for attachment in message.attachments {
+                    contentParts.append([
+                        "type": "image_url",
+                        "image_url": ["url": attachment.dataURI]
+                    ])
+                }
+                result["content"] = contentParts
+            } else {
+                result["content"] = message.content
+            }
+            return result
+        }
+
+        let body: [String: Any] = [
+            "model": model,
+            "messages": payloadMessages,
+            "stream": false
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        } catch {
+            throw OpenAIServiceError.transport("Failed to encode body: \(error.localizedDescription)")
+        }
+
+        // Decode a full (non-stream) completion response.
+        struct CompletionResponse: Decodable {
+            struct Choice: Decodable {
+                struct Message: Decodable {
+                    let content: String?
+                }
+                let message: Message?
+            }
+            let choices: [Choice]?
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch let error as URLError where error.code == .timedOut {
+            throw OpenAIServiceError.transport("Request timed out.")
+        } catch {
+            throw OpenAIServiceError.transport(error.localizedDescription)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw OpenAIServiceError.transport("Invalid HTTP response.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw OpenAIServiceError.httpError(
+                statusCode: http.statusCode,
+                message: Self.decodeErrorMessage(from: data)
+            )
+        }
+
+        do {
+            let decoded = try JSONDecoder().decode(CompletionResponse.self, from: data)
+            if let content = decoded.choices?.first?.message?.content, !content.isEmpty {
+                return content
+            }
+            throw OpenAIServiceError.emptyStream
+        } catch let error as OpenAIServiceError {
+            throw error
+        } catch {
+            throw OpenAIServiceError.decodingFailed(error.localizedDescription)
+        }
+    }
+
     // MARK: - Helpers
 
     /// Extracts a human-readable message from a non-2xx JSON error body.

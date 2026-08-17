@@ -34,9 +34,31 @@ enum TokenUsage {
     static let tokensPerImage = 765
 
     /// Counts input (user/system/history) and output (assistant) tokens.
-    static func summarize(_ messages: [ChatMessage]) -> (input: Int, output: Int) {
+    ///
+    /// - Parameters:
+    ///   - messages: The conversation history shown in the UI.
+    ///   - systemPrompt: The editable system prompt (may be empty).
+    ///   - profileJSON: User-profile JSON attached to the prompt (may be empty).
+    /// - Returns: Estimated input and output token counts **for the next
+    ///   request**, i.e. history + system prompt + user profile count as
+    ///   input context (they are all re-sent on every call — which is exactly
+    ///   how OpenAI billing works).
+    static func summarize(
+        _ messages: [ChatMessage],
+        systemPrompt: String = "",
+        profileJSON: String? = nil
+    ) -> (input: Int, output: Int) {
         var input = 0
         var output = 0
+
+        // The system prompt + user profile are part of the prompt context.
+        if !systemPrompt.isEmpty {
+            input += estimateTokens(systemPrompt)
+        }
+        if let profileJSON, !profileJSON.isEmpty {
+            input += estimateTokens(profileJSON)
+        }
+
         for message in messages {
             let textTokens = estimateTokens(message.content)
             let imageTokens = message.attachments.count * tokensPerImage

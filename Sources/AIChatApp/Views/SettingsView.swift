@@ -135,14 +135,19 @@ private struct UserProfileSection: View {
                     .padding(.vertical, 4)
             } else {
                 List {
-                    ForEach(userProfileStore.preferences) { pref in
-                        HStack {
-                            Text(pref.category)
-                                .font(.caption).foregroundStyle(.secondary)
-                                .frame(width: 90, alignment: .leading)
-                            Text(pref.value)
+                    ForEach($userProfileStore.preferences) { $pref in
+                        HStack(spacing: 8) {
+                            TextField("category", text: $pref.category)
+                                .font(.caption)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 110)
+
+                            TextField("value", text: $pref.value)
                                 .font(.body)
+                                .textFieldStyle(.roundedBorder)
+
                             Spacer()
+
                             Button(role: .destructive) {
                                 userProfileStore.remove(pref)
                             } label: {
@@ -242,6 +247,14 @@ private struct ProfileEditView: View {
                 TextField("Profile Name", text: $draft.name)
                 TextField("Base URL", text: $draft.baseURL)
                 SecureField("API Key", text: $draft.apiKey)
+
+                Section {
+                    Toggle("Streaming (逐字流式输出)", isOn: $draft.streamEnabled)
+                } header: {
+                    Text("Generation")
+                } footer: {
+                    Text("On → token-by-token streaming. Off → wait for the full reply, then show it.")
+                }
 
                 Section {
                     TextEditor(text: $draft.systemPrompt)
