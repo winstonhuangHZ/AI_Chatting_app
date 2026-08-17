@@ -153,7 +153,11 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "backup.exported": "Backup exported",
         "backup.imported": "Backup imported",
         "backup.export.failed": "Export failed",
-        "backup.import.failed": "Import failed"
+        "backup.import.failed": "Import failed",
+        "backup.export.choose_format": "Choose export format",
+        "backup.import.choose_format": "Choose import format",
+        "backup.format.zip": "ZIP archive (readable)",
+        "backup.format.sqlite": "SQLite database"
     ]
 
     // MARK: - 简体中文
@@ -249,7 +253,11 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "appearance.size.small": "小",
         "appearance.size.medium": "中",
         "appearance.size.large": "大",
-        "appearance.size.xlarge": "特大"
+        "appearance.size.xlarge": "特大",
+        "backup.export.choose_format": "选择导出格式",
+        "backup.import.choose_format": "选择导入格式",
+        "backup.format.zip": "ZIP 压缩包（可读）",
+        "backup.format.sqlite": "SQLite 数据库"
     ]
 
     // MARK: - 法语
