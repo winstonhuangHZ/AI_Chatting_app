@@ -49,6 +49,15 @@ enum FontPreset: String, CaseIterable, Identifiable {
         case .mono:   return .system(.monospaced)
         }
     }
+
+    /// 返回指定字号的 SwiftUI Font（供 Label/Text/TextField 等任何视图使用）。
+    func font(size: CGFloat) -> Font {
+        switch self {
+        case .serif:  return .system(size: size, design: .serif)
+        case .sans:   return .system(size: size, design: .default)
+        case .mono:   return .system(size: size, design: .monospaced)
+        }
+    }
 }
 
 /// 字号分级（小 / 中 / 大 / 特大）。
@@ -137,6 +146,16 @@ final class AppearanceStore: ObservableObject {
     /// 当前 markdown 缩放比例。
     var markdownScale: CGFloat {
         fontSizeLevel.markdownScale
+    }
+
+    /// 根据备份恢复外观设置。
+    func apply(from backup: BackupAppearance) {
+        if let preset = FontPreset(rawValue: backup.fontPreset) {
+            fontPreset = preset
+        }
+        if let level = FontSizeLevel(rawValue: backup.fontSizeLevel) {
+            fontSizeLevel = level
+        }
     }
 
     // MARK: - Persistence

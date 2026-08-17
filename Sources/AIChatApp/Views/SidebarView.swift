@@ -8,6 +8,9 @@ struct SidebarView: View {
 
     @EnvironmentObject private var chatViewModel: ChatViewModel
 
+    /// 全局外观（字体预设 / 字号）——观察变化以触发即时刷新。
+    @EnvironmentObject private var appearance: AppearanceStore
+
     // MARK: - Body
 
     var body: some View {
@@ -38,6 +41,7 @@ struct SidebarView: View {
                 chatViewModel.createNewChat()
             }) {
                 Label(L("new.chat"), systemImage: "square.and.pencil")
+                    .font(appearance.fontPreset.font(size: appearance.pointSize))
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -49,7 +53,7 @@ struct SidebarView: View {
             if !chatViewModel.sessions.isEmpty {
                 HStack {
                     Text(L("chat.count", chatViewModel.sessions.count))
-                        .font(.caption)
+                        .appearanceFont(appearance.fontPreset, size: appearance.pointSize - 1)
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button(role: .destructive) {
@@ -80,12 +84,16 @@ private struct SidebarRow: View {
     /// Whether this row is currently selected.
     let isSelected: Bool
 
+    // MARK: - Environment
+
+    @EnvironmentObject private var appearance: AppearanceStore
+
     // MARK: - Body
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(session.title)
-                .font(.body)
+                .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .foregroundStyle(isSelected ? Color.accentColor : Color.primary)

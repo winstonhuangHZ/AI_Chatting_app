@@ -88,6 +88,12 @@ final class ConfigStore: ObservableObject {
         }
     }
 
+    /// Replaces the whole profile list (used when importing a backup).
+    func replaceAll(with new: [APIServerConfig]) {
+        configs = new
+        activeConfigID = configs.first?.id
+    }
+
     /// Refreshes the stored model list + dynamic prices for a profile after a
     /// `fetchModels` call. Also normalizes the base URL to its canonical form.
     func updateModels(

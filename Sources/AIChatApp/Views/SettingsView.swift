@@ -59,6 +59,7 @@ private struct ProfileListView: View {
     @EnvironmentObject private var appSettingViewModel: AppSettingViewModel
     @EnvironmentObject private var userProfileStore: UserProfileStore
     @EnvironmentObject private var appearanceStore: AppearanceStore
+    @EnvironmentObject private var sessionStore: SessionStore
 
     let onAdd: () -> Void
     let onEdit: (APIServerConfig) -> Void
@@ -116,6 +117,16 @@ private struct ProfileListView: View {
             // Interface appearance: font preset + size.
             AppearancePickerView()
                 .environmentObject(appearanceStore)
+
+            Divider()
+
+            // Backup & Restore: export/import all user data as ZIP.
+            BackupRestoreView()
+                .environmentObject(configStore)
+                .environmentObject(sessionStore)
+                .environmentObject(userProfileStore)
+                .environmentObject(appearanceStore)
+                .environmentObject(LocalizationManager.shared)
 
             Divider()
 

@@ -97,6 +97,9 @@ private struct TopBarView: View {
     @EnvironmentObject private var chatViewModel: ChatViewModel
     @EnvironmentObject private var configStore: ConfigStore
 
+    /// 全局外观（字体预设 / 字号）。
+    @EnvironmentObject private var appearance: AppearanceStore
+
     // MARK: - Body
 
     var body: some View {
@@ -139,6 +142,7 @@ private struct TopBarView: View {
                     chatViewModel.cancelStreaming()
                 } label: {
                     Label(L("stop"), systemImage: "stop.fill")
+                        .font(appearance.fontPreset.font(size: appearance.pointSize))
                 }
                 .buttonStyle(.bordered)
                 .tint(.red)
@@ -147,6 +151,7 @@ private struct TopBarView: View {
                     chatViewModel.createNewChat()
                 } label: {
                     Label(L("new.chat"), systemImage: "square.and.pencil")
+                        .font(appearance.fontPreset.font(size: appearance.pointSize))
                 }
                 .buttonStyle(.bordered)
                 .help(L("new.chat.help"))
@@ -463,6 +468,8 @@ private struct InputBarView: View {
     let onSend: (String, [ImageAttachment]) -> Void
     let isStreaming: Bool
 
+    @EnvironmentObject private var appearance: AppearanceStore
+
     @State private var draft = ""
     @State private var pendingAttachments: [ImageAttachment] = []
     @FocusState private var isFocused: Bool
@@ -493,7 +500,7 @@ private struct InputBarView: View {
                 .help(L("attach.image"))
 
                 TextEditor(text: $draft)
-                    .font(.body)
+                    .font(appearance.fontPreset.font(size: appearance.pointSize))
                     .frame(minHeight: 40, maxHeight: 120)
                     .focused($isFocused)
                     .scrollContentBackground(.hidden)

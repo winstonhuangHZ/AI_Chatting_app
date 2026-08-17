@@ -88,6 +88,19 @@ final class SessionStore: ObservableObject {
         activeSessionID = nil
     }
 
+    /// Replaces the entire session list (used when importing a backup).
+    func replaceAll(with new: [ChatSession]) {
+        cancelPersistPause()
+        sessions = new.sorted { $0.createdAt > $1.createdAt }
+        activeSessionID = sessions.first?.id
+        persistPaused = false
+    }
+
+    /// Cancels any active persistence pause and forces a write.
+    private func cancelPersistPause() {
+        persistPaused = false
+    }
+
     /// Appends a message to the given session and persists it.
     func appendMessage(_ message: ChatMessage, to sessionID: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }

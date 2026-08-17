@@ -8,6 +8,9 @@ struct ContentView: View {
 
     @EnvironmentObject private var chatViewModel: ChatViewModel
 
+    /// 全局外观（字体预设 / 字号）——观察变化以触发即时刷新。
+    @EnvironmentObject private var appearance: AppearanceStore
+
     // MARK: - Body
 
     var body: some View {

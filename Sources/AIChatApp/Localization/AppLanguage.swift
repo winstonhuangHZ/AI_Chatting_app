@@ -141,7 +141,15 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "appearance.size.small": "Small",
         "appearance.size.medium": "Medium",
         "appearance.size.large": "Large",
-        "appearance.size.xlarge": "Extra Large"
+        "appearance.size.xlarge": "Extra Large",
+        "backup.title": "Backup & Restore",
+        "backup.description": "Export all data (chats, API profiles, user profile, appearance, language) as a ZIP. Import it on another machine to restore everything.",
+        "backup.export": "Export Backup…",
+        "backup.import": "Import Backup…",
+        "backup.exported": "Backup exported",
+        "backup.imported": "Backup imported",
+        "backup.export.failed": "Export failed",
+        "backup.import.failed": "Import failed"
     ]
 
     // MARK: - 简体中文
