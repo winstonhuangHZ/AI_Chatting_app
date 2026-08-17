@@ -72,6 +72,7 @@ struct AIChatApp: App {
         Settings {
             SettingsView()
                 .environmentObject(configStore)
+                .environmentObject(sessionStore)
                 .environmentObject(appSettingViewModel)
                 .environmentObject(userProfileStore)
                 .environmentObject(localizationManager)
