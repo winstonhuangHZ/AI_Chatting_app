@@ -217,7 +217,7 @@ final class ChatViewModel: ObservableObject {
 
                 var accumulated = ""
                 // Throttle UI updates so tiny SSE chunks don't trigger a full
-                // SwiftUI redraw every time. We flush at most every 50 ms.
+                // SwiftUI redraw every time. We flush at most every 100 ms.
                 var lastFlush = ContinuousClock.now
                 for try await delta in stream {
                     // If the user switched sessions mid-stream, stop writing.
@@ -230,9 +230,9 @@ final class ChatViewModel: ObservableObject {
                     // code fences) stay intact across SSE chunks.
                     accumulated += delta + "\n"
 
-                    // 50 ms throttle: only flush to the UI when enough time
+                    // 100 ms throttle: only flush to the UI when enough time
                     // has passed (and always flush on the final iteration).
-                    if lastFlush.duration(to: .now) > .milliseconds(50) {
+                    if lastFlush.duration(to: .now) > .milliseconds(100) {
                         lastFlush = .now
                         self.sessionStore.updateLastAssistantContent(
                             Self.stripPersonalization(from: accumulated),

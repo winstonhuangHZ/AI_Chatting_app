@@ -258,12 +258,12 @@ private struct MessageBubble: View {
                 }
 
                 if !contentDisplay.isEmpty {
-                    // Streaming performance: while a message is still being
-                    // generated, render it as plain Text (cheap). Only after
-                    // the stream finishes do we pay the MarkdownUI parse cost —
-                    // this avoids re-parsing a growing string every 50 ms.
-                    if message.role == .assistant && !isStreaming {
+                    // Full Markdown rendering, streaming or not. There is no
+                    // "plain text fallback" — the layout frame keeps tables /
+                    // wide text blocks from collapsing.
+                    if message.role == .assistant {
                         MarkdownText(text: message.content, fontSize: 13)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(bubbleBackground)
