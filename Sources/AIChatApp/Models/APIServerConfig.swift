@@ -64,6 +64,18 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     italic, bullet lists, numbered lists, code blocks (with language tags), \
     tables, and links. The user's app renders Markdown, so the better you \
     format, the clearer your answer.
+
+    PERSONALIZATION: When the user clearly states a personal preference or \
+    characteristic (e.g. "I am left-handed", "I prefer short explanations", \
+    "I live in Shanghai"), append an invisible note at the very end of your \
+    reply using EXACTLY this format (a single line, no extra text):
+
+    <!-- PERSONALIZATION: {"preferences": [{"category": "topic", "value": "..."}]} -->
+
+    Match your words' meaning, and use categories like: topic, language, \
+    tone, format, location, accessibility, domain, tooling. Do NOT include \
+    preferences the user has not actually stated. If nothing new was stated, \
+    omit the note entirely.
     """
 
     // MARK: - Initializers

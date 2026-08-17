@@ -17,6 +17,9 @@ final class ChatViewModel: ObservableObject {
     private let configStore: ConfigStore
     private let service: OpenAIService
 
+    /// Persisted user profile (learned preferences) sent alongside the prompt.
+    let userProfileStore: UserProfileStore
+
     // MARK: - Published state
 
     /// All sessions (delegated to the shared store).
@@ -47,6 +50,23 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Convenience
 
+    /// Helper that returns the system prompt enriched with the user profile.
+    private func buildSystemPrompt(for config: APIServerConfig) -> String {
+        var prompt = config.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if prompt.isEmpty {
+            prompt = APIServerConfig.defaultSystemPrompt
+        }
+
+        if let profileJSON = userProfileStore.jsonPayload {
+            prompt += """
+
+            KNOWLEDGE ABOUT THE USER (use it to personalize your reply):
+            \(profileJSON)
+            """
+        }
+        return prompt
+    }
+
     /// The active session object, if any.
     var activeSession: ChatSession? {
         guard let id = activeSessionID else { return nil }
@@ -60,10 +80,16 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Initializers
 
-    init(sessionStore: SessionStore, configStore: ConfigStore, service: OpenAIService) {
+    init(
+        sessionStore: SessionStore,
+        configStore: ConfigStore,
+        service: OpenAIService,
+        userProfileStore: UserProfileStore = UserProfileStore()
+    ) {
         self.sessionStore = sessionStore
         self.configStore = configStore
         self.service = service
+        self.userProfileStore = userProfileStore
 
         self.sessions = sessionStore.sessions
         self.activeSessionID = sessionStore.activeSessionID
@@ -138,10 +164,8 @@ final class ChatViewModel: ObservableObject {
         var history = sessionStore.activeSession?.messages
             .filter { !$0.content.isEmpty || !$0.attachments.isEmpty } ?? []
 
-        let systemPrompt = config.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !systemPrompt.isEmpty {
-            history.insert(.system(systemPrompt), at: 0)
-        }
+        let systemPrompt = buildSystemPrompt(for: config)
+        history.insert(.system(systemPrompt), at: 0)
 
         isStreaming = true
 
@@ -169,10 +193,20 @@ final class ChatViewModel: ObservableObject {
                         return
                     }
                     accumulated += delta
+                    // Render Markdown without the invisible personalization
+                    // wrapper even while streaming.
                     self.sessionStore.updateLastAssistantContent(
-                        accumulated,
+                        Self.stripPersonalization(from: accumulated),
                         in: sessionID
                     )
+                }
+
+                // After the full reply arrives, parse & store any new
+                // personalization the model detected.
+                if let prefs = UserProfileStore.parse(from: accumulated) {
+                    for p in prefs {
+                        self.userProfileStore.upsert(category: p.category, value: p.value)
+                    }
                 }
 
                 // Stream finished normally.
@@ -201,6 +235,19 @@ final class ChatViewModel: ObservableObject {
                 self.errorMessage = error.localizedDescription
             }
         }
+    }
+
+    /// Removes the invisible `<!-- PERSONALIZATION: ... -->` wrapper from a
+    /// reply so it never shows in the rendered bubble or the stored message.
+    private static func stripPersonalization(from text: String) -> String {
+        guard let start = text.range(of: "<!-- PERSONALIZATION:") else { return text }
+        guard let end = text.range(of: "-->", range: start.upperBound..<text.endIndex) else {
+            return String(text[..<start.lowerBound])
+        }
+        var result = text
+        result.removeSubrange(start.lowerBound..<end.upperBound)
+        return result
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Stops the in-flight stream and saves partial content.

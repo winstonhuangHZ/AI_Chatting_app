@@ -1,9 +1,11 @@
 import SwiftUI
 
-/// Settings window (macOS 14+): manages API relay profiles.
+/// Settings window (macOS 14+): manages API relay profiles + user profile
+/// (learned personalization preferences).
 struct SettingsView: View {
     @EnvironmentObject private var configStore: ConfigStore
     @EnvironmentObject private var appSettingViewModel: AppSettingViewModel
+    @EnvironmentObject private var userProfileStore: UserProfileStore
 
     @State private var editingConfig: APIServerConfig?
     @State private var isAddingNew = false
@@ -35,7 +37,7 @@ struct SettingsView: View {
                 )
             }
         }
-        .frame(minWidth: 520, minHeight: 440)
+        .frame(minWidth: 520, minHeight: 480)
         .alert(
             appSettingViewModel.statusIsError ? "Operation Failed" : "Success",
             isPresented: $showStatusAlert
@@ -55,6 +57,7 @@ struct SettingsView: View {
 private struct ProfileListView: View {
     @EnvironmentObject private var configStore: ConfigStore
     @EnvironmentObject private var appSettingViewModel: AppSettingViewModel
+    @EnvironmentObject private var userProfileStore: UserProfileStore
 
     let onAdd: () -> Void
     let onEdit: (APIServerConfig) -> Void
@@ -100,7 +103,59 @@ private struct ProfileListView: View {
                     )
                 }
             }
+
+            Divider()
+
+            // User Profile section: learned personalization preferences.
+            UserProfileSection()
+                .environmentObject(userProfileStore)
         }
+    }
+}
+
+// MARK: - User profile section
+
+/// Editable list of learned personalization preferences.
+private struct UserProfileSection: View {
+    @EnvironmentObject private var userProfileStore: UserProfileStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("User Profile", systemImage: "person")
+                .font(.headline)
+
+            Text("Preferences the AI noticed from your chats. They're sent with the system prompt to personalize replies.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if userProfileStore.preferences.isEmpty {
+                Text("No preferences learned yet. Mention what you like in a chat and the AI will remember it here.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.vertical, 4)
+            } else {
+                List {
+                    ForEach(userProfileStore.preferences) { pref in
+                        HStack {
+                            Text(pref.category)
+                                .font(.caption).foregroundStyle(.secondary)
+                                .frame(width: 90, alignment: .leading)
+                            Text(pref.value)
+                                .font(.body)
+                            Spacer()
+                            Button(role: .destructive) {
+                                userProfileStore.remove(pref)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                }
+                .frame(height: CGFloat(min(userProfileStore.preferences.count, 6)) * 30 + 14)
+            }
+        }
+        .padding(16)
     }
 }
 

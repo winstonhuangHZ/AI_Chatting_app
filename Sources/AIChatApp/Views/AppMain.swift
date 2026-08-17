@@ -12,6 +12,9 @@ struct AIChatApp: App {
     /// Persists chat sessions.
     @StateObject private var sessionStore = SessionStore()
 
+    /// Persists learned user preferences for personalization.
+    @StateObject private var userProfileStore = UserProfileStore()
+
     /// Drives the chat UI.
     @StateObject private var chatViewModel: ChatViewModel
 
@@ -27,11 +30,14 @@ struct AIChatApp: App {
 
         _configStore = StateObject(wrappedValue: configStore)
         _sessionStore = StateObject(wrappedValue: sessionStore)
+        let profileStore = UserProfileStore()
+        _userProfileStore = StateObject(wrappedValue: profileStore)
         _chatViewModel = StateObject(
             wrappedValue: ChatViewModel(
                 sessionStore: sessionStore,
                 configStore: configStore,
-                service: OpenAIService()
+                service: OpenAIService(),
+                userProfileStore: profileStore
             )
         )
         _appSettingViewModel = StateObject(
@@ -48,6 +54,7 @@ struct AIChatApp: App {
                 .environmentObject(sessionStore)
                 .environmentObject(chatViewModel)
                 .environmentObject(appSettingViewModel)
+                .environmentObject(userProfileStore)
                 .frame(minWidth: 900, minHeight: 600)
         }
         .windowStyle(.titleBar)
@@ -58,6 +65,7 @@ struct AIChatApp: App {
             SettingsView()
                 .environmentObject(configStore)
                 .environmentObject(appSettingViewModel)
+                .environmentObject(userProfileStore)
         }
     }
 }
