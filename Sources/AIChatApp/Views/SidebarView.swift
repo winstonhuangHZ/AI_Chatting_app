@@ -11,6 +11,9 @@ struct SidebarView: View {
     /// 全局外观（字体预设 / 字号）——观察变化以触发即时刷新。
     @EnvironmentObject private var appearance: AppearanceStore
 
+    /// 界面本地化——语言切换时即时刷新全部文本。
+    @EnvironmentObject private var localization: LocalizationManager
+
     // MARK: - Body
 
     var body: some View {
@@ -94,6 +97,7 @@ private struct SidebarRow: View {
     // MARK: - Environment
 
     @EnvironmentObject private var appearance: AppearanceStore
+    @EnvironmentObject private var localization: LocalizationManager
 
     // MARK: - Body
 

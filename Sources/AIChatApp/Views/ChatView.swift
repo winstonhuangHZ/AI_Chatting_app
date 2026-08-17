@@ -15,6 +15,9 @@ struct ChatView: View {
     @EnvironmentObject private var chatViewModel: ChatViewModel
     @EnvironmentObject private var configStore: ConfigStore
 
+    /// 界面本地化——语言切换时即时刷新全部文本。
+    @EnvironmentObject private var localization: LocalizationManager
+
     /// Scroll to the latest message when content updates.
     @State private var lastMessageID: UUID?
 
@@ -99,6 +102,9 @@ private struct TopBarView: View {
 
     /// 全局外观（字体预设 / 字号）。
     @EnvironmentObject private var appearance: AppearanceStore
+
+    /// 界面本地化——语言切换时即时刷新全部文本。
+    @EnvironmentObject private var localization: LocalizationManager
 
     // MARK: - Body
 
@@ -251,6 +257,7 @@ private struct MessageBubble: View {
 
     @EnvironmentObject private var appearance: AppearanceStore
     @EnvironmentObject private var chatViewModel: ChatViewModel
+    @EnvironmentObject private var localization: LocalizationManager
 
     // MARK: - Body
 
@@ -475,6 +482,9 @@ private struct UsageBarView: View {
     let systemPrompt: String
     let profileJSON: String?
 
+    /// 界面本地化——语言切换时即时刷新。
+    @EnvironmentObject private var localization: LocalizationManager
+
     private var summary: (input: Int, output: Int) {
         TokenUsage.summarize(messages, systemPrompt: systemPrompt, profileJSON: profileJSON)
     }
@@ -542,6 +552,9 @@ private struct InputBarView: View {
     let isStreaming: Bool
 
     @EnvironmentObject private var appearance: AppearanceStore
+
+    /// 界面本地化——语言切换时即时刷新。
+    @EnvironmentObject private var localization: LocalizationManager
 
     @State private var draft = ""
     @State private var pendingAttachments: [ImageAttachment] = []

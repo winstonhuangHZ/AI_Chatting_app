@@ -12,6 +12,9 @@ struct AppearancePickerView: View {
 
     @EnvironmentObject private var appearance: AppearanceStore
 
+    /// 界面本地化——语言切换时即时刷新。
+    @EnvironmentObject private var localization: LocalizationManager
+
     // MARK: - Body
 
     var body: some View {

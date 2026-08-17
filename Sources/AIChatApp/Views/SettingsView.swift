@@ -7,6 +7,9 @@ struct SettingsView: View {
     @EnvironmentObject private var appSettingViewModel: AppSettingViewModel
     @EnvironmentObject private var userProfileStore: UserProfileStore
 
+    /// 界面本地化——语言切换时即时刷新全部文本。
+    @EnvironmentObject private var localization: LocalizationManager
+
     @State private var editingConfig: APIServerConfig?
     @State private var isAddingNew = false
     @State private var showStatusAlert = false
@@ -60,6 +63,9 @@ private struct ProfileListView: View {
     @EnvironmentObject private var userProfileStore: UserProfileStore
     @EnvironmentObject private var appearanceStore: AppearanceStore
     @EnvironmentObject private var sessionStore: SessionStore
+
+    /// 界面本地化——语言切换时即时刷新全部文本。
+    @EnvironmentObject private var localization: LocalizationManager
 
     let onAdd: () -> Void
     let onEdit: (APIServerConfig) -> Void
@@ -200,6 +206,9 @@ private struct ProfileRow: View {
     let config: APIServerConfig
     let isActive: Bool
     let isTesting: Bool
+
+    /// 界面本地化——语言切换时即时刷新。
+    @EnvironmentObject private var localization: LocalizationManager
     let onActivate: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -253,6 +262,9 @@ private struct ProfileRow: View {
 private struct ProfileEditView: View {
     @EnvironmentObject private var configStore: ConfigStore
     @EnvironmentObject private var appSettingViewModel: AppSettingViewModel
+
+    /// 界面本地化——语言切换时即时刷新。
+    @EnvironmentObject private var localization: LocalizationManager
 
     @State private var draft: APIServerConfig
     let isNew: Bool
