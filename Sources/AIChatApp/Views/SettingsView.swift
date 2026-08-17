@@ -37,7 +37,7 @@ struct SettingsView: View {
                 )
             }
         }
-        .frame(minWidth: 520, minHeight: 480)
+        .frame(minWidth: 560, idealWidth: 700, minHeight: 520)
         .alert(
             appSettingViewModel.statusIsError ? L("operation.failed") : L("success"),
             isPresented: $showStatusAlert

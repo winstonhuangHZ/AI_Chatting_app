@@ -1,7 +1,11 @@
 import SwiftUI
 
-/// 界面外观设置：字体预设（serif / sans / mono）+ 字号分级（小/中/大/特大）。
-/// 修改即时生效，无需重启。
+/// 界面外观设置：字号分级（小/中/大/特大）。
+///
+/// 字体预设（serif/sans/mono）相关代码已保留（见 `AppearanceStore.fontPreset` 与
+/// MARK: TODO 注释），但因 swift-markdown-ui 对中文 serif 映射不理想，
+/// 暂不在界面开放字体预设选择（`isFontPresetSelectionEnabled = false`），
+/// 统一使用默认 sans 保证界面一致；字号分级正常开放。
 struct AppearancePickerView: View {
 
     // MARK: - Environment
@@ -15,14 +19,17 @@ struct AppearancePickerView: View {
             Label(L("appearance.font"), systemImage: "textformat")
                 .font(.headline)
 
-            Picker(L("appearance.font"), selection: $appearance.fontPreset) {
-                ForEach(FontPreset.allCases) { preset in
-                    Text(preset.displayName)
-                        .tag(preset)
+            // 字体预设选择暂隐藏（保留代码，见 AppearanceStore TODO 注释）。
+            if appearance.isFontPresetSelectionEnabled {
+                Picker(L("appearance.font"), selection: $appearance.fontPreset) {
+                    ForEach(FontPreset.allCases) { preset in
+                        Text(preset.displayName)
+                            .tag(preset)
+                    }
                 }
+                .pickerStyle(.menu)
+                .frame(maxWidth: 280)
             }
-            .pickerStyle(.menu)
-            .frame(maxWidth: 280)
 
             Picker(L("appearance.fontsize"), selection: $appearance.fontSizeLevel) {
                 ForEach(FontSizeLevel.allCases) { level in
@@ -33,7 +40,7 @@ struct AppearancePickerView: View {
             .pickerStyle(.menu)
             .frame(maxWidth: 280)
 
-            // 字号预览
+            // 字号预览（跟随当前预设，默认 sans）。
             Text(L("appearance.sample"))
                 .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
                 .foregroundStyle(.secondary)

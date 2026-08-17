@@ -42,9 +42,13 @@ enum FontPreset: String, CaseIterable, Identifiable {
     }
 
     /// MarkdownUI 可用的字体族（按预设注入）。
+    ///
+    /// serif 使用 `.system(.serif)` 而非 `.custom("ui-serif")`：custom 只映射
+    /// 拉丁字体（New York/Times），中文会回退到默认无衬线；system serif 设计
+    /// 会让系统自动为中文选择衬线字体（宋体 Songti SC），与用户消息一致。
     var fontPropertiesFamily: FontProperties.Family {
         switch self {
-        case .serif:  return .custom("ui-serif")
+        case .serif:  return .system(.serif)
         case .sans:   return .system(.default)
         case .mono:   return .system(.monospaced)
         }
@@ -107,6 +111,11 @@ final class AppearanceStore: ObservableObject {
     // MARK: - Published state
 
     /// 当前字体预设。
+    ///
+    /// > TODO: Markdown 渲染引擎（swift-markdown-ui）对中文 serif 映射不理想
+    /// > （custom 字体族只影响拉丁文字）。后续可尝试自定义 Theme 或替换渲染器。
+    /// > 目前 UI 暂不开放选择（`isFontPresetSelectionEnabled = false`），
+    /// > 默认使用 `.sans` 保证界面一致；相关代码全部保留，仅隐藏入口。
     @Published var fontPreset: FontPreset {
         didSet { persist() }
     }
@@ -157,6 +166,11 @@ final class AppearanceStore: ObservableObject {
             fontSizeLevel = level
         }
     }
+
+    /// 是否在设置界面开放字体预设选择。
+    ///
+    /// 当前为 `false`（隐藏入口，默认 sans）。实现 serif 中文映射后可改为 `true`。
+    var isFontPresetSelectionEnabled = false
 
     // MARK: - Persistence
 
