@@ -308,6 +308,11 @@ private struct MessageBubble: View {
                     }
                     .padding(.leading, 4)
                 }
+
+                // Quick actions below AI messages: Retry / Copy / Delete.
+                if message.role == .assistant && !isStreaming {
+                    messageActionBar
+                }
             }
 
             if message.role == .user {
@@ -336,6 +341,56 @@ private struct MessageBubble: View {
                 Label(L("msg.delete"), systemImage: "trash")
             }
         }
+    }
+
+    // MARK: - Quick action bar (below assistant messages)
+
+    @ViewBuilder
+    private var messageActionBar: some View {
+        HStack(spacing: 8) {
+            actionButton(
+                title: L("msg.retry"),
+                systemImage: "arrow.clockwise",
+                help: L("msg.retry")
+            ) {
+                chatViewModel.retryMessage(message)
+            }
+
+            actionButton(
+                title: L("msg.copy"),
+                systemImage: "doc.on.doc",
+                help: L("msg.copy")
+            ) {
+                chatViewModel.copyMessage(message)
+            }
+            .disabled(message.content.isEmpty)
+
+            actionButton(
+                title: L("msg.delete"),
+                systemImage: "trash",
+                help: L("msg.delete")
+            ) {
+                chatViewModel.deleteMessage(message)
+            }
+        }
+        .padding(.leading, 4)
+        .padding(.top, 2)
+    }
+
+    private func actionButton(
+        title: String,
+        systemImage: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(appearance.fontPreset.font(size: 10))
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .help(help)
     }
 
     // MARK: - Attachment grid

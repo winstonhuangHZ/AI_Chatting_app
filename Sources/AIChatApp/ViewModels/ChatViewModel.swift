@@ -153,6 +153,40 @@ final class ChatViewModel: ObservableObject {
         sessionStore.deleteMessage(message, in: sessionID)
     }
 
+    /// Re-generates an assistant reply by deleting it and letting the model
+    /// answer the previous user message again.
+    func retryMessage(_ message: ChatMessage) {
+        guard message.role == .assistant, let sessionID = activeSessionID else { return }
+        guard let config = configStore.activeConfig else {
+            errorMessage = L("no.active.profile")
+            return
+        }
+
+        // 若正在流式生成该消息，先停止。
+        if message.id == streamingAssistantID {
+            cancelStreaming()
+        }
+
+        // 删除这条 assistant 回复。
+        sessionStore.deleteMessage(message, in: sessionID)
+        clearError()
+
+        // 构建历史：删除后的会话全部消息（应以上一条 user 消息结尾）+
+        // system prompt。使用 `activeSession`（VM 单一数据源）。
+        var history = activeSession?.messages
+            .filter { !$0.content.isEmpty || !$0.attachments.isEmpty } ?? []
+
+        let systemPrompt = buildSystemPrompt(for: config)
+        history.insert(.system(systemPrompt), at: 0)
+
+        startGeneration(
+            sessionID: sessionID,
+            config: config,
+            model: config.selectedModel,
+            history: history
+        )
+    }
+
     /// Selects an existing session.
     func selectSession(_ session: ChatSession) {
         guard session.id != activeSessionID else { return }
@@ -193,15 +227,6 @@ final class ChatViewModel: ObservableObject {
         // Persist the user message (with any image attachments).
         sessionStore.appendMessage(.user(trimmed, attachments: attachments), to: sessionID)
 
-        // While streaming, skip the per-flush UserDefaults encode + disk write
-        // (the main cause of UI stutter); we'll force one save at the end.
-        sessionStore.persistPaused = true
-
-        // Append a placeholder assistant message that fills as deltas land.
-        let assistantMessage = ChatMessage.assistant()
-        sessionStore.appendMessage(assistantMessage, to: sessionID)
-        streamingAssistantID = assistantMessage.id
-
         // Build the request history: prepend the editable system prompt,
         // then keep messages with text OR image attachments so pure-image
         // vision requests are preserved.
@@ -217,6 +242,36 @@ final class ChatViewModel: ObservableObject {
 
         let systemPrompt = buildSystemPrompt(for: config)
         history.insert(.system(systemPrompt), at: 0)
+
+        startGeneration(
+            sessionID: sessionID,
+            config: config,
+            model: model,
+            history: history
+        )
+    }
+
+    // MARK: - Generation pipeline
+
+    /// Starts a generation request (streaming or non-streaming) and wires it to
+    /// the placeholder assistant message that appears in the UI.
+    ///
+    /// Shared by `sendMessage` and `retryMessage` so both paths produce the same
+    /// streaming experience (placeholder bubble → SSE deltas → final persist).
+    private func startGeneration(
+        sessionID: UUID,
+        config: APIServerConfig,
+        model: String,
+        history: [ChatMessage]
+    ) {
+        // While streaming, skip the per-flush UserDefaults encode + disk write
+        // (the main cause of UI stutter); we'll force one save at the end.
+        sessionStore.persistPaused = true
+
+        // Append a placeholder assistant message that fills as deltas land.
+        let assistantMessage = ChatMessage.assistant()
+        sessionStore.appendMessage(assistantMessage, to: sessionID)
+        streamingAssistantID = assistantMessage.id
 
         isStreaming = true
 

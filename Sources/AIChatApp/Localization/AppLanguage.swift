@@ -68,6 +68,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "relay.price": "(relay price)",
         "msg.copy": "Copy",
         "msg.delete": "Delete",
+        "msg.retry": "Retry",
 
         // 顶栏
         "profile": "Profile",
@@ -175,6 +176,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "relay.price": "(中转站价格)",
         "msg.copy": "复制",
         "msg.delete": "删除",
+        "msg.retry": "重新生成",
 
         "profile": "配置",
         "model": "模型",
