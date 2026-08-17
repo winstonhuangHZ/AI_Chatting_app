@@ -66,6 +66,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "usage.tokens": "Tokens: ↑%1$@ ↓%2$@",
         "price.unknown": "(price unknown for this model)",
         "relay.price": "(relay price)",
+        "msg.copy": "Copy",
+        "msg.delete": "Delete",
 
         // 顶栏
         "profile": "Profile",
@@ -171,6 +173,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "usage.tokens": "Tokens：↑%1$@ ↓%2$@",
         "price.unknown": "(该模型价格未知)",
         "relay.price": "(中转站价格)",
+        "msg.copy": "复制",
+        "msg.delete": "删除",
 
         "profile": "配置",
         "model": "模型",

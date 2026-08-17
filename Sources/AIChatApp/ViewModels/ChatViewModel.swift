@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AppKit
 
 /// Drives the active chat session: sending messages, consuming the SSE
 /// stream, and accumulating response tokens into the assistant message.
@@ -133,6 +134,23 @@ final class ChatViewModel: ObservableObject {
     func deleteSession(_ session: ChatSession) {
         cancelStreaming()
         sessionStore.delete(session)
+    }
+
+    /// Copies a message's text to the system pasteboard.
+    func copyMessage(_ message: ChatMessage) {
+        let content = message.content.isEmpty ? "…" : message.content
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(content, forType: .string)
+    }
+
+    /// Deletes a single message from the active session.
+    func deleteMessage(_ message: ChatMessage) {
+        guard let sessionID = activeSessionID else { return }
+        // 若正在流式生成该消息，先停止。
+        if message.id == streamingAssistantID {
+            cancelStreaming()
+        }
+        sessionStore.deleteMessage(message, in: sessionID)
     }
 
     /// Selects an existing session.

@@ -250,6 +250,7 @@ private struct MessageBubble: View {
     // MARK: - Environment
 
     @EnvironmentObject private var appearance: AppearanceStore
+    @EnvironmentObject private var chatViewModel: ChatViewModel
 
     // MARK: - Body
 
@@ -318,6 +319,23 @@ private struct MessageBubble: View {
         // KEY FIX: prevent the whole bubble from being squeezed into a
         // zero-height row by LazyVStack while its Markdown re-lays out.
         .fixedSize(horizontal: false, vertical: true)
+        // Right-click actions: copy / delete.
+        .contextMenu {
+            Button {
+                chatViewModel.copyMessage(message)
+            } label: {
+                Label(L("msg.copy"), systemImage: "doc.on.doc")
+            }
+            .disabled(message.content.isEmpty)
+
+            Divider()
+
+            Button(role: .destructive) {
+                chatViewModel.deleteMessage(message)
+            } label: {
+                Label(L("msg.delete"), systemImage: "trash")
+            }
+        }
     }
 
     // MARK: - Attachment grid

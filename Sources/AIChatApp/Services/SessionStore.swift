@@ -121,6 +121,12 @@ final class SessionStore: ObservableObject {
         sessions[sessionIndex].messages[msgIndex].content = content
     }
 
+    /// Deletes a single message (by id) from the given session.
+    func deleteMessage(_ message: ChatMessage, in sessionID: UUID) {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+        sessions[index].messages.removeAll { $0.id == message.id }
+    }
+
     /// Removes a partially-received assistant message (used when a stream fails
     /// before yielding anything useful).
     func removeLastAssistantMessage(in sessionID: UUID) {
