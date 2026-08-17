@@ -18,6 +18,6 @@ struct ContentView: View {
             ChatView()
         }
         .navigationSplitViewStyle(.balanced)
-        .navigationTitle(chatViewModel.activeSession?.title ?? "AI Chat")
+        .navigationTitle(chatViewModel.activeSession?.title ?? L("app.name"))
     }
 }

@@ -39,7 +39,7 @@ struct SettingsView: View {
         }
         .frame(minWidth: 520, minHeight: 480)
         .alert(
-            appSettingViewModel.statusIsError ? "Operation Failed" : "Success",
+            appSettingViewModel.statusIsError ? L("operation.failed") : L("success"),
             isPresented: $showStatusAlert
         ) {
             Button("OK", role: .cancel) { appSettingViewModel.clearStatus() }
@@ -65,9 +65,9 @@ private struct ProfileListView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("API Relay Profiles").font(.title2.bold())
+                Text(L("api.relay.profiles")).font(.title2.bold())
                 Spacer()
-                Button(action: onAdd) { Label("Add Profile", systemImage: "plus") }
+                Button(action: onAdd) { Label(L("add.profile"), systemImage: "plus") }
                     .buttonStyle(.borderedProminent)
             }
             .padding(16)
@@ -76,11 +76,11 @@ private struct ProfileListView: View {
 
             if configStore.configs.isEmpty {
                 ContentUnavailableView {
-                    Label("No Profiles", systemImage: "network.slash")
+                    Label(L("no.profiles"), systemImage: "network.slash")
                 } description: {
-                    Text("Add an OpenAI-compatible relay server to start chatting.")
+                    Text(L("no.profiles.description"))
                 } actions: {
-                    Button("Add Profile", action: onAdd)
+                    Button(L("add.profile"), action: onAdd)
                         .buttonStyle(.borderedProminent)
                 }
                 .frame(maxHeight: .infinity)
@@ -109,6 +109,12 @@ private struct ProfileListView: View {
             // User Profile section: learned personalization preferences.
             UserProfileSection()
                 .environmentObject(userProfileStore)
+
+            Divider()
+
+            // Interface language picker (UN official languages).
+            LanguagePickerView()
+                .environmentObject(LocalizationManager.shared)
         }
     }
 }
@@ -121,15 +127,15 @@ private struct UserProfileSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("User Profile", systemImage: "person")
+            Label(L("user.profile"), systemImage: "person")
                 .font(.headline)
 
-            Text("Preferences the AI noticed from your chats. They're sent with the system prompt to personalize replies.")
+            Text(L("user.profile.description"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             if userProfileStore.preferences.isEmpty {
-                Text("No preferences learned yet. Mention what you like in a chat and the AI will remember it here.")
+                Text(L("no.preferences.learned"))
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .padding(.vertical, 4)
@@ -181,7 +187,7 @@ private struct ProfileRow: View {
             HStack {
                 Text(config.displayName).font(.headline)
                 if isActive {
-                    Text("Active").font(.caption)
+                    Text(L("active")).font(.caption)
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Color.accentColor.opacity(0.15))
                         .clipShape(Capsule())
@@ -191,24 +197,26 @@ private struct ProfileRow: View {
             }
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(config.baseURL.isEmpty ? "No base URL set" : config.baseURL)
+                Text(config.baseURL.isEmpty ? L("no.base.url") : config.baseURL)
                     .font(.callout).foregroundStyle(.secondary).lineLimit(1)
-                Text(config.apiKey.isEmpty ? "No API key set" : "API key: ••••••••")
+                Text(config.apiKey.isEmpty ? L("no.api.key") : "API key: ••••••••")
                     .font(.caption).foregroundStyle(.secondary)
                 Text(config.selectedModel.isEmpty
-                     ? "No model selected"
+                     ? L("no.model.selected")
                      : "Model: \(config.selectedModel)")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
             HStack(spacing: 8) {
-                Button(config.availableModels.isEmpty ? "Fetch Models" : "\(config.availableModels.count) models",
+                Button(config.availableModels.isEmpty
+                       ? L("fetch.models")
+                       : L("models.count", config.availableModels.count),
                        action: onFetchModels)
                     .buttonStyle(.bordered)
-                Button("Test", action: onTest).buttonStyle(.bordered)
-                Button("Edit", action: onEdit).buttonStyle(.bordered)
+                Button(L("test"), action: onTest).buttonStyle(.bordered)
+                Button(L("edit"), action: onEdit).buttonStyle(.bordered)
                 Spacer()
-                Button("Delete", role: .destructive, action: onDelete).buttonStyle(.bordered)
+                Button(L("delete"), role: .destructive, action: onDelete).buttonStyle(.bordered)
             }
             .font(.callout)
         }
@@ -241,42 +249,42 @@ private struct ProfileEditView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(isNew ? "Add Profile" : "Edit Profile").font(.title2.bold())
+            Text(isNew ? L("add.profile.title") : L("edit.profile.title")).font(.title2.bold())
 
             Form {
-                TextField("Profile Name", text: $draft.name)
-                TextField("Base URL", text: $draft.baseURL)
-                SecureField("API Key", text: $draft.apiKey)
+                TextField(L("profile.name"), text: $draft.name)
+                TextField(L("base.url"), text: $draft.baseURL)
+                SecureField(L("api.key"), text: $draft.apiKey)
 
                 Section {
-                    Toggle("Streaming (逐字流式输出)", isOn: $draft.streamEnabled)
+                    Toggle(L("streaming.on"), isOn: $draft.streamEnabled)
 
-                    Toggle("发送时间戳 (让模型感知当前日期/时段)", isOn: $draft.includeTimestamp)
+                    Toggle(L("timestamp.on"), isOn: $draft.includeTimestamp)
                 } header: {
-                    Text("Generation")
+                    Text(L("generation"))
                 } footer: {
-                    Text("Streaming: On → 逐字显示. Time-stamp: On → system prompt 附带 CURRENT TIME.")
+                    Text(L("generation.footer"))
                 }
 
                 Section {
                     TextEditor(text: $draft.systemPrompt)
                         .font(.system(.caption, design: .monospaced))
                         .frame(minHeight: 100, maxHeight: 160)
-                    Label("System prompt is sent before each chat; told the model Markdown is rendered.",
+                    Label(L("system.prompt.hint"),
                           systemImage: "text.alignleft")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } header: {
-                    Text("System Prompt")
+                    Text(L("system.prompt"))
                 } footer: {
-                    Text("Edit freely — e.g. set the assistant's role/persona.")
+                    Text(L("system.prompt.footer"))
                 }
 
                 if !isNew {
-                    Section("Models") {
-                        Picker("Selected Model", selection: $draft.selectedModel) {
+                    Section(L("models")) {
+                        Picker(L("selected.model"), selection: $draft.selectedModel) {
                             if draft.availableModels.isEmpty {
-                                Text("No models yet").tag("")
+                                Text(L("no.models.yet")).tag("")
                             }
                             ForEach(draft.availableModels, id: \.self) { model in
                                 Text(MultimodalSupport.displayName(model)).tag(model)
@@ -284,7 +292,7 @@ private struct ProfileEditView: View {
                         }
                         .disabled(draft.availableModels.isEmpty)
 
-                        Label("🖼 = multimodal (vision) model",
+                        Label(L("multimodal.hint"),
                               systemImage: "photo.on.rectangle")
                             .font(.caption).foregroundStyle(.secondary)
 
@@ -297,7 +305,7 @@ private struct ProfileEditView: View {
                                     }
                                 }
                             } label: {
-                                Label("Fetch Models", systemImage: "arrow.clockwise")
+                                Label(L("fetch.models.button"), systemImage: "arrow.clockwise")
                             }
                             .disabled(appSettingViewModel.isLoadingModels)
 
@@ -311,10 +319,10 @@ private struct ProfileEditView: View {
             .formStyle(.grouped)
 
             HStack {
-                Button("Cancel", role: .cancel, action: onCancel).buttonStyle(.bordered)
+                Button(L("cancel"), role: .cancel, action: onCancel).buttonStyle(.bordered)
                 Spacer()
                 Button(action: save) {
-                    Text(isNew ? "Add" : "Save")
+                    Text(isNew ? L("add") : L("save"))
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)

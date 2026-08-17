@@ -34,9 +34,9 @@ struct ChatView: View {
                 )
             } else {
                 ContentUnavailableView(
-                    "No Chat Selected",
+                    L("no.chat.selected"),
                     systemImage: "bubble.left.and.bubble.right",
-                    description: Text("Choose a chat from the sidebar or create a new one.")
+                    description: Text(L("no.chat.description"))
                 )
             }
 
@@ -102,13 +102,13 @@ private struct TopBarView: View {
     var body: some View {
         HStack(spacing: 12) {
             // Profile picker
-            Picker("Profile", selection: $configStore.activeConfigID) {
+            Picker(L("profile"), selection: $configStore.activeConfigID) {
                 ForEach(configStore.configs) { config in
                     Text(config.displayName)
                         .tag(Optional(config.id))
                 }
                 if configStore.configs.isEmpty {
-                    Text("No profile — add in Settings (⌘,)")
+                    Text(L("no.configs.tag"))
                         .tag(Optional<UUID>.none)
                 }
             }
@@ -118,9 +118,9 @@ private struct TopBarView: View {
             // Model picker (populated from the active profile).
             // Multimodal models are marked with 🖼 on the right.
             if let activeConfig = configStore.activeConfig {
-                Picker("Model", selection: modelPickerBinding(for: activeConfig)) {
+                Picker(L("model"), selection: modelPickerBinding(for: activeConfig)) {
                     if activeConfig.availableModels.isEmpty {
-                        Text("No models — fetch in Settings").tag("")
+                        Text(L("model.empty.tag")).tag("")
                     }
                     ForEach(activeConfig.availableModels, id: \.self) { model in
                         Text(MultimodalSupport.displayName(model)).tag(model)
@@ -138,7 +138,7 @@ private struct TopBarView: View {
                 Button {
                     chatViewModel.cancelStreaming()
                 } label: {
-                    Label("Stop", systemImage: "stop.fill")
+                    Label(L("stop"), systemImage: "stop.fill")
                 }
                 .buttonStyle(.bordered)
                 .tint(.red)
@@ -146,17 +146,17 @@ private struct TopBarView: View {
                 Button {
                     chatViewModel.createNewChat()
                 } label: {
-                    Label("New Chat", systemImage: "square.and.pencil")
+                    Label(L("new.chat"), systemImage: "square.and.pencil")
                 }
                 .buttonStyle(.bordered)
-                .help("Start a new chat (⌘N)")
+                .help(L("new.chat.help"))
             }
 
             SettingsLink {
                 Image(systemName: "gearshape")
             }
             .buttonStyle(.bordered)
-            .help("Open API profile settings (⌘,)")
+            .help(L("settings.open.help"))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -229,6 +229,11 @@ private struct MessageList: View {
 
 /// Renders a single chat message as a bubble with role-appropriate styling
 /// and inline image previews for attachments.
+///
+/// Overlap fix: `.fixedSize(horizontal: false, vertical: true)` on the outer
+/// container prevents LazyVStack from collapsing a bubble's width/height
+/// while Markdown is re-rendering during streaming — the previous cause of
+/// overlapping (a new message appearing on top of an older one).
 private struct MessageBubble: View {
 
     /// Message to display.
@@ -258,18 +263,19 @@ private struct MessageBubble: View {
                 }
 
                 if !contentDisplay.isEmpty {
-                    // Full Markdown rendering, streaming or not. There is no
-                    // "plain text fallback" — the layout frame keeps tables /
-                    // wide text blocks from collapsing.
                     if message.role == .assistant {
                         MarkdownText(text: message.content, fontSize: 13)
+                            // Inner: let the markdown breathe to the full row.
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(bubbleBackground)
                             .clipShape(RoundedRectangle(cornerRadius: 10))
+                            // Outer cap so long tables don't stretch the app.
                             .frame(maxWidth: 620,
                                    alignment: message.role == .user ? .trailing : .leading)
+                            // Never compress bubble height while streaming.
+                            .fixedSize(horizontal: false, vertical: true)
                     } else {
                         Text(contentDisplay)
                             .font(.body)
@@ -279,13 +285,14 @@ private struct MessageBubble: View {
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                             .frame(maxWidth: 620,
                                    alignment: message.role == .user ? .trailing : .leading)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
                 if isStreaming {
                     HStack(spacing: 4) {
                         ProgressView().controlSize(.small)
-                        Text("Generating…")
+                        Text(L("generating"))
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     .padding(.leading, 4)
@@ -298,6 +305,9 @@ private struct MessageBubble: View {
         }
         .frame(maxWidth: .infinity,
                alignment: message.role == .user ? .trailing : .leading)
+        // KEY FIX: prevent the whole bubble from being squeezed into a
+        // zero-height row by LazyVStack while its Markdown re-lays out.
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: - Attachment grid
@@ -316,9 +326,9 @@ private struct MessageBubble: View {
 
     private var roleLabel: String {
         switch message.role {
-        case .user: return "You"
-        case .assistant: return "Assistant"
-        case .system: return "System"
+        case .user: return L("you")
+        case .assistant: return L("assistant")
+        case .system: return L("system")
         }
     }
 
@@ -406,7 +416,9 @@ private struct UsageBarView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Text("Tokens: ↑\(TokenUsage.formatCount(summary.input)) ↓\(TokenUsage.formatCount(summary.output))")
+            Text(L("usage.tokens",
+                   TokenUsage.formatCount(summary.input),
+                   TokenUsage.formatCount(summary.output)))
                 .font(.caption).foregroundStyle(.secondary)
 
             if let cost = estimatedCost {
@@ -415,17 +427,17 @@ private struct UsageBarView: View {
             }
 
             if priceUnknown {
-                Text("(price unknown for this model)")
+                Text(L("price.unknown"))
                     .font(.caption).foregroundStyle(.secondary)
             } else if usingDynamicPrice {
-                Text("(relay price)")
+                Text(L("relay.price"))
                     .font(.caption).foregroundStyle(.secondary)
             }
 
             Spacer()
 
             if !messages.isEmpty {
-                Text("\(messages.count) msg(s)")
+                Text(L("msg.count", messages.count))
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -473,7 +485,7 @@ private struct InputBarView: View {
                         .font(.system(size: 14))
                 }
                 .buttonStyle(.borderless)
-                .help("Attach image(s)")
+                .help(L("attach.image"))
 
                 TextEditor(text: $draft)
                     .font(.body)
@@ -500,7 +512,7 @@ private struct InputBarView: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(isSendDisabled)
-                .help("Send (Enter)")
+                .help(L("send"))
             }
             .padding(.horizontal, 12)
         }
@@ -530,8 +542,8 @@ private struct InputBarView: View {
 
     private func pickImages() {
         let panel = NSOpenPanel()
-        panel.title = "Attach Image"
-        panel.prompt = "Attach"
+        panel.title = L("attach.image")
+        panel.prompt = L("attach.image")
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.canChooseFiles = true

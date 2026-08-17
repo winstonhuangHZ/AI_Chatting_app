@@ -157,7 +157,7 @@ final class ChatViewModel: ObservableObject {
         guard !trimmed.isEmpty || !attachments.isEmpty else { return }
         guard let sessionID = activeSessionID else { return }
         guard let config = config else {
-            errorMessage = "No active API profile. Add one in Settings first."
+            errorMessage = L("no.active.profile")
             return
         }
 

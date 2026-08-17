@@ -19,7 +19,7 @@ struct SidebarView: View {
                 )
                 .tag(session.id)
                 .contextMenu {
-                    Button("Delete Chat", role: .destructive) {
+                    Button(L("delete.chat"), role: .destructive) {
                         chatViewModel.deleteSession(session)
                     }
                 }
@@ -37,7 +37,7 @@ struct SidebarView: View {
             Button(action: {
                 chatViewModel.createNewChat()
             }) {
-                Label("New Chat", systemImage: "square.and.pencil")
+                Label(L("new.chat"), systemImage: "square.and.pencil")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -48,7 +48,7 @@ struct SidebarView: View {
         .safeAreaInset(edge: .bottom) {
             if !chatViewModel.sessions.isEmpty {
                 HStack {
-                    Text("\(chatViewModel.sessions.count) chat(s)")
+                    Text(L("chat.count", chatViewModel.sessions.count))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -58,7 +58,7 @@ struct SidebarView: View {
                         }
                     } label: {
                         Image(systemName: "trash")
-                            .help("Delete all chats")
+                            .help(L("delete.all.chats"))
                     }
                     .buttonStyle(.borderless)
                 }
@@ -98,7 +98,7 @@ private struct SidebarRow: View {
                     Text("•")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
-                    Text("\(session.messages.count) msgs")
+                    Text(L("msgs.count", session.messages.count))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

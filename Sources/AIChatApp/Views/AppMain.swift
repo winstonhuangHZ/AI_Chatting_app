@@ -21,6 +21,9 @@ struct AIChatApp: App {
     /// Drives the settings UI.
     @StateObject private var appSettingViewModel: AppSettingViewModel
 
+    /// Interface localization.
+    @StateObject private var localizationManager = LocalizationManager.shared
+
     // MARK: - Initializers
 
     init() {
@@ -55,6 +58,7 @@ struct AIChatApp: App {
                 .environmentObject(chatViewModel)
                 .environmentObject(appSettingViewModel)
                 .environmentObject(userProfileStore)
+                .environmentObject(localizationManager)
                 .frame(minWidth: 900, minHeight: 600)
         }
         .windowStyle(.titleBar)
@@ -66,6 +70,7 @@ struct AIChatApp: App {
                 .environmentObject(configStore)
                 .environmentObject(appSettingViewModel)
                 .environmentObject(userProfileStore)
+                .environmentObject(localizationManager)
         }
     }
 }
