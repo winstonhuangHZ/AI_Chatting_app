@@ -24,6 +24,9 @@ struct AIChatApp: App {
     /// Interface localization.
     @StateObject private var localizationManager = LocalizationManager.shared
 
+    /// Interface appearance (font preset + size).
+    @StateObject private var appearanceStore = AppearanceStore()
+
     // MARK: - Initializers
 
     init() {
@@ -59,6 +62,7 @@ struct AIChatApp: App {
                 .environmentObject(appSettingViewModel)
                 .environmentObject(userProfileStore)
                 .environmentObject(localizationManager)
+                .environmentObject(appearanceStore)
                 .frame(minWidth: 900, minHeight: 600)
         }
         .windowStyle(.titleBar)
@@ -71,6 +75,7 @@ struct AIChatApp: App {
                 .environmentObject(appSettingViewModel)
                 .environmentObject(userProfileStore)
                 .environmentObject(localizationManager)
+                .environmentObject(appearanceStore)
         }
     }
 }

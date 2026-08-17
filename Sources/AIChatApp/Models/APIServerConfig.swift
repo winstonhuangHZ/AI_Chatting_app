@@ -73,10 +73,11 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     tables, and links. The user's app renders Markdown, so the better you \
     format, the clearer your answer.
 
-    PERSONALIZATION: When the user clearly states a personal preference or \
-    characteristic (e.g. "I am left-handed", "I prefer short explanations", \
-    "I live in Shanghai"), append an invisible note at the very end of your \
-    reply using EXACTLY this format (a single line, no extra text):
+    PERSONALIZATION: You know the user's profile prefs (KNOWLEDGE ABOUT THE USER) \
+    and the user's current message. When the user clearly states a NEW preference \
+    or characteristic (e.g. "I am left-handed", "I prefer short explanations", \
+    "I live in Shanghai"), append an invisible note at the very end of your reply \
+    using EXACTLY this format (a single line, no extra text):
 
     <!-- PERSONALIZATION: {"preferences": [{"category": "topic", "value": "..."}]} -->
 
@@ -84,6 +85,12 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     tone, format, location, accessibility, domain, tooling. Do NOT include \
     preferences the user has not actually stated. If nothing new was stated, \
     omit the note entirely.
+
+    To DELETE an outdated preference, use "op": "remove" and the matching category:
+    <!-- PERSONALIZATION: {"preferences": [{"op": "remove", "category": "location"}]} -->
+
+    To UPDATE an existing preference, just send the same category with the new value:
+    <!-- PERSONALIZATION: {"preferences": [{"category": "language", "value": "English"}]} -->
     """
 
     // MARK: - Initializers

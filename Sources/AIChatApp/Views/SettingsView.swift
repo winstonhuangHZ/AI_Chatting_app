@@ -58,6 +58,7 @@ private struct ProfileListView: View {
     @EnvironmentObject private var configStore: ConfigStore
     @EnvironmentObject private var appSettingViewModel: AppSettingViewModel
     @EnvironmentObject private var userProfileStore: UserProfileStore
+    @EnvironmentObject private var appearanceStore: AppearanceStore
 
     let onAdd: () -> Void
     let onEdit: (APIServerConfig) -> Void
@@ -109,6 +110,12 @@ private struct ProfileListView: View {
             // User Profile section: learned personalization preferences.
             UserProfileSection()
                 .environmentObject(userProfileStore)
+
+            Divider()
+
+            // Interface appearance: font preset + size.
+            AppearancePickerView()
+                .environmentObject(appearanceStore)
 
             Divider()
 

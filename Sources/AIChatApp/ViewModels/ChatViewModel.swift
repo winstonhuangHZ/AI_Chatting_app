@@ -208,8 +208,11 @@ final class ChatViewModel: ObservableObject {
                     let cleaned = Self.stripPersonalization(from: reply)
                     self.sessionStore.updateLastAssistantContent(cleaned, in: sessionID)
 
-                    if let prefs = UserProfileStore.parse(from: reply) {
-                        for p in prefs {
+                    if let changes = UserProfileStore.parse(from: reply) {
+                        for cat in changes.removes {
+                            self.userProfileStore.removeAll(category: cat)
+                        }
+                        for p in changes.upserts {
                             self.userProfileStore.upsert(category: p.category, value: p.value)
                         }
                     }
@@ -263,8 +266,11 @@ final class ChatViewModel: ObservableObject {
 
                 // After the full reply arrives, parse & store any new
                 // personalization the model detected.
-                if let prefs = UserProfileStore.parse(from: accumulated) {
-                    for p in prefs {
+                if let changes = UserProfileStore.parse(from: accumulated) {
+                    for cat in changes.removes {
+                        self.userProfileStore.removeAll(category: cat)
+                    }
+                    for p in changes.upserts {
                         self.userProfileStore.upsert(category: p.category, value: p.value)
                     }
                 }

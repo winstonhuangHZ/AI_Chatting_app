@@ -242,6 +242,10 @@ private struct MessageBubble: View {
     /// `true` while this assistant message is being streamed.
     let isStreaming: Bool
 
+    // MARK: - Environment
+
+    @EnvironmentObject private var appearance: AppearanceStore
+
     // MARK: - Body
 
     var body: some View {
@@ -264,7 +268,7 @@ private struct MessageBubble: View {
 
                 if !contentDisplay.isEmpty {
                     if message.role == .assistant {
-                        MarkdownText(text: message.content, fontSize: 13)
+                        MarkdownText(text: message.content, fontSize: nil)
                             // Inner: let the markdown breathe to the full row.
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 12)
@@ -278,7 +282,7 @@ private struct MessageBubble: View {
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
                         Text(contentDisplay)
-                            .font(.body)
+                            .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(bubbleBackground)
@@ -293,7 +297,8 @@ private struct MessageBubble: View {
                     HStack(spacing: 4) {
                         ProgressView().controlSize(.small)
                         Text(L("generating"))
-                            .font(.caption2).foregroundStyle(.secondary)
+                            .appearanceFont(appearance.fontPreset, size: 11)
+                            .foregroundStyle(.secondary)
                     }
                     .padding(.leading, 4)
                 }

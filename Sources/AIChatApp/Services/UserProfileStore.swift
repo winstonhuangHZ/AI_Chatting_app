@@ -18,6 +18,24 @@ struct UserPreference: Identifiable, Codable, Hashable {
     }
 }
 
+/// Parsed profile changes from a `<!-- PERSONALIZATION: ... -->` marker.
+///
+/// The model can request two kinds of changes:
+/// - **upsert**: add or update a preference (matched by category+value).
+/// - **remove**: delete every preference with the given category.
+struct ProfileChanges {
+    /// Preferences to add/update.
+    var upserts: [UserPreference]
+
+    /// Category names to remove (all matching preferences are deleted).
+    var removes: [String]
+
+    /// `true` when there is nothing to apply.
+    var isEmpty: Bool {
+        upserts.isEmpty && removes.isEmpty
+    }
+}
+
 /// Persists the user's learned/edited profile (preferences) in `UserDefaults`,
 /// and provides helpers to encode/decode it into the system prompt payload.
 final class UserProfileStore: ObservableObject {
@@ -64,6 +82,13 @@ final class UserProfileStore: ObservableObject {
         preferences.removeAll { $0.id == preference.id }
     }
 
+    /// Removes every preference whose category matches (case-insensitive).
+    func removeAll(category: String) {
+        let key = category.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty else { return }
+        preferences.removeAll { $0.category.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == key }
+    }
+
     /// Replaces the whole set (used when parsing a batch from the model).
     func replaceAll(with new: [UserPreference]) {
         preferences = new
@@ -86,8 +111,19 @@ final class UserProfileStore: ObservableObject {
     }
 
     /// Parses a `<!-- PERSONALIZATION: {...} -->` block from an assistant reply.
-    /// Returns the parsed preferences array (or nil if absent/invalid).
-    static func parse(from reply: String) -> [UserPreference]? {
+    ///
+    /// Supported payload shapes:
+    /// ```
+    /// {"preferences":[{"category":"language","value":"Chinese"}]}          // upsert
+    /// {"preferences":[{"op":"upsert","category":"tone","value":"formal"}]} // upsert (explicit)
+    /// {"preferences":[{"op":"remove","category":"location"}]}              // remove by category
+    /// ```
+    ///
+    /// - `op` is optional and defaults to `"upsert"`.
+    /// - `"remove"` entries match by category (case-insensitive) and ignore value.
+    ///
+    /// Returns `nil` when the marker is absent or nothing usable is found.
+    static func parse(from reply: String) -> ProfileChanges? {
         // Locate the marker: <!-- PERSONALIZATION: ... -->
         guard let lowerBound = reply.range(of: "<!-- PERSONALIZATION:") else { return nil }
         let afterWrapper = reply[lowerBound.upperBound...]
@@ -108,14 +144,25 @@ final class UserProfileStore: ObservableObject {
             return nil
         }
 
-        var result: [UserPreference] = []
-        for p in prefs {
-            guard let category = p["category"] as? String,
-                  let value = p["value"] as? String,
-                  !category.isEmpty, !value.isEmpty else { continue }
-            result.append(UserPreference(category: category, value: value))
+        var changes = ProfileChanges(upserts: [], removes: [])
+        for item in prefs {
+            guard let category = item["category"] as? String,
+                  !category.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+
+            // Operation: explicit "op" field, defaults to "upsert".
+            let op = (item["op"] as? String)?.lowercased() ?? "upsert"
+
+            if op == "remove" {
+                changes.removes.append(category)
+                continue
+            }
+
+            // Upsert: category + value required.
+            guard let value = item["value"] as? String,
+                  !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            changes.upserts.append(UserPreference(category: category, value: value))
         }
-        return result.isEmpty ? nil : result
+        return changes.isEmpty ? nil : changes
     }
 
     // MARK: - Persistence

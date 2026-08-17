@@ -130,7 +130,18 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "no.configs.tag": "No profile — add in Settings (⌘,)",
         "model.empty.tag": "No models — fetch in Settings",
         "language.settings": "Interface Language",
-        "language.hint": "Switch the app UI language. Matches your system language by default."
+        "language.hint": "Switch the app UI language. Matches your system language by default.",
+        "appearance.font": "Font Preset",
+        "appearance.fontsize": "Font Size",
+        "appearance.sample": "Sample text — The quick brown fox jumps over the lazy dog. 中文示例：敏捷的棕色狐狸跳过了懒狗。",
+        "appearance.description": "Applies to chat messages instantly. Choose serif, sans, or mono.",
+        "appearance.serif": "Serif (衬线)",
+        "appearance.sans": "Sans (无衬线)",
+        "appearance.mono": "Mono (等宽)",
+        "appearance.size.small": "Small",
+        "appearance.size.medium": "Medium",
+        "appearance.size.large": "Large",
+        "appearance.size.xlarge": "Extra Large"
     ]
 
     // MARK: - 简体中文
@@ -211,7 +222,18 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "no.configs.tag": "无配置 — 请在设置中添加 (⌘,)",
         "model.empty.tag": "无模型 — 请在设置中获取",
         "language.settings": "界面语言",
-        "language.hint": "切换应用界面语言，默认跟随系统语言。"
+        "language.hint": "切换应用界面语言，默认跟随系统语言。",
+        "appearance.font": "字体预设",
+        "appearance.fontsize": "字号",
+        "appearance.sample": "示例文本 — 敏捷的棕色狐狸跳过了懒狗。The quick brown fox jumps over the lazy dog.",
+        "appearance.description": "即时应用到聊天消息。可选择衬线、无衬线或等宽。",
+        "appearance.serif": "衬线 (Serif)",
+        "appearance.sans": "无衬线 (Sans)",
+        "appearance.mono": "等宽 (Mono)",
+        "appearance.size.small": "小",
+        "appearance.size.medium": "中",
+        "appearance.size.large": "大",
+        "appearance.size.xlarge": "特大"
     ]
 
     // MARK: - 法语
@@ -292,7 +314,18 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "no.configs.tag": "Aucun profil — ajoutez-en dans les réglages (⌘,)",
         "model.empty.tag": "Aucun modèle — récupérez-en dans les réglages",
         "language.settings": "Langue de l'interface",
-        "language.hint": "Change la langue de l'interface. Suit la langue du système par défaut."
+        "language.hint": "Change la langue de l'interface. Suit la langue du système par défaut.",
+        "appearance.font": "Police",
+        "appearance.fontsize": "Taille",
+        "appearance.sample": "Exemple — Le renard brun rapide saute par-dessus le chien paresseux.",
+        "appearance.description": "S'applique instantanément aux messages. Choisissez serif, sans ou mono.",
+        "appearance.serif": "Serif",
+        "appearance.sans": "Sans",
+        "appearance.mono": "Mono",
+        "appearance.size.small": "Petite",
+        "appearance.size.medium": "Moyenne",
+        "appearance.size.large": "Grande",
+        "appearance.size.xlarge": "Extra large"
     ]
 
     // MARK: - 西班牙语
@@ -373,7 +406,18 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "no.configs.tag": "Sin perfil — añada en Ajustes (⌘,)",
         "model.empty.tag": "Sin modelos — obtenga en Ajustes",
         "language.settings": "Idioma de la interfaz",
-        "language.hint": "Cambia el idioma de la interfaz. Sigue el idioma del sistema por defecto."
+        "language.hint": "Cambia el idioma de la interfaz. Sigue el idioma del sistema por defecto.",
+        "appearance.font": "Tipo de letra",
+        "appearance.fontsize": "Tamaño",
+        "appearance.sample": "Ejemplo — El rápido zorro marrón salta sobre el perro perezoso.",
+        "appearance.description": "Se aplica al instante a los mensajes. Elija serif, sans o mono.",
+        "appearance.serif": "Serif",
+        "appearance.sans": "Sans",
+        "appearance.mono": "Mono",
+        "appearance.size.small": "Pequeño",
+        "appearance.size.medium": "Medio",
+        "appearance.size.large": "Grande",
+        "appearance.size.xlarge": "Extra grande"
     ]
 
     // MARK: - 俄语
@@ -454,7 +498,18 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "no.configs.tag": "Нет профиля — добавьте в настройках (⌘,)",
         "model.empty.tag": "Нет моделей — получите в настройках",
         "language.settings": "Язык интерфейса",
-        "language.hint": "Переключить язык интерфейса. По умолчанию соответствует языку системы."
+        "language.hint": "Переключить язык интерфейса. По умолчанию соответствует языку системы.",
+        "appearance.font": "Шрифт",
+        "appearance.fontsize": "Размер",
+        "appearance.sample": "Пример — Быстрая коричневая лиса прыгает через ленивую собаку.",
+        "appearance.description": "Применяется к сообщениям мгновенно. Выберите serif, sans или mono.",
+        "appearance.serif": "Serif",
+        "appearance.sans": "Sans",
+        "appearance.mono": "Mono",
+        "appearance.size.small": "Мелкий",
+        "appearance.size.medium": "Средний",
+        "appearance.size.large": "Крупный",
+        "appearance.size.xlarge": "Очень крупный"
     ]
 
     // MARK: - 阿拉伯语
@@ -535,7 +590,18 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "no.configs.tag": "لا يوجد ملف — أضفه في الإعدادات (⌘,)",
         "model.empty.tag": "لا توجد نماذج — اجلبها من الإعدادات",
         "language.settings": "لغة الواجهة",
-        "language.hint": "بدّل لغة واجهة التطبيق. يتبع لغة النظام افتراضيًا."
+        "language.hint": "بدّل لغة واجهة التطبيق. يتبع لغة النظام افتراضيًا.",
+        "appearance.font": "الخط",
+        "appearance.fontsize": "الحجم",
+        "appearance.sample": "مثال — الثعلب البني السريع يقفز فوق الكلب الكسول.",
+        "appearance.description": "يُطبق على الرسائل فورًا. اختر serif أو sans أو mono.",
+        "appearance.serif": "Serif",
+        "appearance.sans": "Sans",
+        "appearance.mono": "Mono",
+        "appearance.size.small": "صغير",
+        "appearance.size.medium": "متوسط",
+        "appearance.size.large": "كبير",
+        "appearance.size.xlarge": "كبير جدًا"
     ]
 }
 
