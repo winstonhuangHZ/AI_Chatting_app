@@ -14,7 +14,14 @@ struct SidebarView: View {
     // MARK: - Body
 
     var body: some View {
-        List(selection: $chatViewModel.activeSessionID) {
+        // Custom selection binding: writing back goes through
+        // `chatViewModel.selectSession(id:)`, which ALSO updates
+        // `sessionStore.activeSessionID` so the message-history builder in
+        // `sendMessage` reads the correct session after app relaunch.
+        List(selection: Binding(
+            get: { chatViewModel.activeSessionID },
+            set: { chatViewModel.selectSession(id: $0) }
+        )) {
             ForEach(chatViewModel.sessions) { session in
                 SidebarRow(
                     session: session,

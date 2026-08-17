@@ -142,6 +142,13 @@ final class ChatViewModel: ObservableObject {
         sessionStore.activeSessionID = session.id
     }
 
+    /// Selects a session by id (used by the sidebar List selection binding).
+    func selectSession(id: UUID?) {
+        guard let id, id != activeSessionID else { return }
+        cancelStreaming()
+        sessionStore.activeSessionID = id
+    }
+
     // MARK: - Sending messages
 
     /// Sends the user's text (optionally with image attachments) as a message
@@ -180,7 +187,14 @@ final class ChatViewModel: ObservableObject {
         // Build the request history: prepend the editable system prompt,
         // then keep messages with text OR image attachments so pure-image
         // vision requests are preserved.
-        var history = sessionStore.activeSession?.messages
+        //
+        // IMPORTANT: use `self.activeSession` (driven by the UI's
+        // activeSessionID) rather than `sessionStore.activeSession` — the
+        // store's activeSessionID is only synchronized when selecting through
+        // `selectSession`, while the sidebar List selection updates the VM
+        // directly. Using the VM's active session guarantees the history sent
+        // matches the chat currently displayed.
+        var history = activeSession?.messages
             .filter { !$0.content.isEmpty || !$0.attachments.isEmpty } ?? []
 
         let systemPrompt = buildSystemPrompt(for: config)
@@ -295,7 +309,7 @@ final class ChatViewModel: ObservableObject {
                 self.streamingAssistantID = nil
 
                 // Remove the placeholder assistant message if nothing arrived.
-                let partial = self.sessionStore.activeSession?
+                let partial = self.activeSession?
                     .messages.last(where: { $0.role == .assistant })
                 if partial?.content.isEmpty == true {
                     self.sessionStore.removeLastAssistantMessage(in: sessionID)
