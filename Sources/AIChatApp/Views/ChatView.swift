@@ -33,6 +33,7 @@ struct ChatView: View {
                 MessageList(
                     session: session,
                     streamingMessageID: chatViewModel.streamingAssistantID,
+                    hasReceivedFirstToken: chatViewModel.hasReceivedFirstToken,
                     lastMessageID: $lastMessageID
                 )
             } else {
@@ -201,6 +202,9 @@ private struct MessageList: View {
     /// The id of the assistant message currently being streamed.
     let streamingMessageID: UUID?
 
+    /// `true` once streaming has yielded content (drives two-stage indicator).
+    let hasReceivedFirstToken: Bool
+
     /// Binding updated to the newest message id (drives autoscroll).
     @Binding var lastMessageID: UUID?
 
@@ -213,7 +217,8 @@ private struct MessageList: View {
                     ForEach(session.messages) { message in
                         MessageBubble(
                             message: message,
-                            isStreaming: message.id == streamingMessageID
+                            isStreaming: message.id == streamingMessageID,
+                            hasReceivedFirstToken: hasReceivedFirstToken
                         )
                         .id(message.id)
                     }
@@ -252,6 +257,9 @@ private struct MessageBubble: View {
 
     /// `true` while this assistant message is being streamed.
     let isStreaming: Bool
+
+    /// `true` once streaming has yielded the first content token.
+    let hasReceivedFirstToken: Bool
 
     // MARK: - Environment
 
@@ -309,7 +317,11 @@ private struct MessageBubble: View {
                 if isStreaming {
                     HStack(spacing: 4) {
                         ProgressView().controlSize(.small)
-                        Text(L("generating"))
+                        // Before the first token: "Waiting for response…";
+                        // once tokens flow: "Generating…". Both render modes
+                        // (streaming & non-streaming render) use SSE transport,
+                        // so this two-stage indicator applies to both.
+                        Text(L(hasReceivedFirstToken ? "generating" : "generating.waiting"))
                             .appearanceFont(appearance.fontPreset, size: 11)
                             .foregroundStyle(.secondary)
                     }
@@ -434,7 +446,11 @@ private struct MessageBubble: View {
     }
 
     private var contentDisplay: String {
-        message.content.isEmpty && isStreaming ? "…" : message.content
+        // Non-streaming render mode: bubble content stays empty while streaming
+        // (full reply written once at the end), so no "…" placeholder needed.
+        // Streaming render mode fills content progressively (throttled), so the
+        // "…" fallback only applies when there is genuinely no content yet.
+        message.content.isEmpty && isStreaming ? "" : message.content
     }
 
     private var avatar: some View {

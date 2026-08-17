@@ -32,6 +32,13 @@ final class ChatViewModel: ObservableObject {
     /// `true` while a stream request is in flight.
     @Published var isStreaming = false
 
+    /// `true` once the first non-empty SSE token has arrived while streaming.
+    ///
+    /// Non-streaming render mode still uses SSE transport (low time-to-first-
+    /// token) but delays rendering until the stream ends; this flag drives the
+    /// "Waiting for response…" → "Generating…" two-stage indicator.
+    @Published var hasReceivedFirstToken = false
+
     /// User-facing error banner text (nil hides the banner).
     @Published var errorMessage: String?
 
@@ -283,19 +290,42 @@ final class ChatViewModel: ObservableObject {
             guard let self else { return }
 
             do {
-                // In non-streaming mode we wait for the whole response at once.
+                // NON-STREAMING RENDER MODE (transport is still SSE/streamed):
+                // accumulate the whole reply over the SSE stream but do NOT
+                // update the bubble token-by-token. The placeholder stays empty
+                // showing "waiting/generating…"; once the stream ends we write
+                // the full text in one update and Markdown renders exactly once.
                 if !configForRequest.streamEnabled {
-                    let reply = try await service.chatOnce(
+                    let stream = try await service.streamChat(
                         config: configForRequest,
                         model: modelForRequest,
                         messages: history
                     )
 
-                    // Persist the full reply (with personalization stripped).
-                    let cleaned = Self.stripPersonalization(from: reply)
-                    self.sessionStore.updateLastAssistantContent(cleaned, in: sessionID)
+                    var accumulated = ""
+                    for try await delta in stream {
+                        guard self.activeSessionID == sessionID else {
+                            self.cancelStreaming()
+                            return
+                        }
+                        // `delta.content` is already JSON-decoded; real newlines
+                        // are preserved inside the string, so do NOT append a
+                        // synthetic "\n" per frame.
+                        accumulated += delta
 
-                    if let changes = UserProfileStore.parse(from: reply) {
+                        if !self.hasReceivedFirstToken
+                            && !accumulated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            self.hasReceivedFirstToken = true
+                        }
+                    }
+                    // One-shot render.
+                    self.sessionStore.updateLastAssistantContent(
+                        Self.stripPersonalization(from: accumulated),
+                        in: sessionID
+                    )
+                    self.hasReceivedFirstToken = false
+
+                    if let changes = UserProfileStore.parse(from: accumulated) {
                         for cat in changes.removes {
                             self.userProfileStore.removeAll(category: cat)
                         }
@@ -311,9 +341,8 @@ final class ChatViewModel: ObservableObject {
                     return
                 }
 
-                // Streaming mode: `streamChat` is an actor method — requires
-                // `await` (Swift 6 strict concurrency). It returns an
-                // AsyncThrowingStream.
+                // STREAMING RENDER MODE: `streamChat` yields deltas and we
+                // update the bubble token-by-token (throttled to ~100ms).
                 let stream = try await service.streamChat(
                     config: configForRequest,
                     model: modelForRequest,
@@ -379,12 +408,14 @@ final class ChatViewModel: ObservableObject {
                 self.isStreaming = false
                 self.streamTask = nil
                 self.streamingAssistantID = nil
+                self.hasReceivedFirstToken = false
 
             } catch {
                 self.sessionStore.forcePersist()
                 self.isStreaming = false
                 self.streamTask = nil
                 self.streamingAssistantID = nil
+                self.hasReceivedFirstToken = false
 
                 // Remove the placeholder assistant message if nothing arrived.
                 let partial = self.activeSession?
@@ -416,6 +447,7 @@ final class ChatViewModel: ObservableObject {
         streamTask?.cancel()
         streamTask = nil
         isStreaming = false
+        hasReceivedFirstToken = false
         streamingAssistantID = nil
     }
 
