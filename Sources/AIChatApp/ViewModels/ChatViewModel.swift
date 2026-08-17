@@ -341,10 +341,15 @@ final class ChatViewModel: ObservableObject {
                         self.cancelStreaming()
                         return
                     }
-                    // `bytes.lines` splits on \n and drops the newline; we
-                    // must re-add it so Markdown blocks (tables, lists,
-                    // code fences) stay intact across SSE chunks.
-                    accumulated += delta + "\n"
+                    // IMPORTANT: do NOT append a synthetic "\n" after each
+                    // delta. The `delta.content` from OpenAI-compatible SSE is
+                    // already JSON-decoded, so any real newlines inside the
+                    // model's reply are already preserved as "\n" characters
+                    // inside the string. If we add "\n" per delta, relays that
+                    // stream one character per frame produce a broken message
+                    // where every character is on its own line (and that
+                    // corrupted text gets persisted into history).
+                    accumulated += delta
 
                     // Signal the UI once we actually have content.
                     if !self.hasReceivedFirstToken
