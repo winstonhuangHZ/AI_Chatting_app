@@ -430,10 +430,13 @@ actor OpenAIService {
             return result
         }
 
+        // Non-streaming DeepSeek-reasoner-compatible relays require
+        // `enable_thinking: false` (thinking only works in streaming mode).
         let body: [String: Any] = [
             "model": model,
             "messages": payloadMessages,
-            "stream": false
+            "stream": false,
+            "enable_thinking": false
         ]
 
         do {
