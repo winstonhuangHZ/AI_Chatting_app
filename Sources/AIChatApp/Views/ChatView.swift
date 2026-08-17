@@ -258,9 +258,11 @@ private struct MessageBubble: View {
                 }
 
                 if !contentDisplay.isEmpty {
-                    // Assistant replies render Markdown; user messages stay
-                    // as plain text.
-                    if message.role == .assistant {
+                    // Streaming performance: while a message is still being
+                    // generated, render it as plain Text (cheap). Only after
+                    // the stream finishes do we pay the MarkdownUI parse cost —
+                    // this avoids re-parsing a growing string every 50 ms.
+                    if message.role == .assistant && !isStreaming {
                         MarkdownText(text: message.content, fontSize: 13)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)

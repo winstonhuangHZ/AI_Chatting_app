@@ -153,6 +153,10 @@ final class ChatViewModel: ObservableObject {
         // Persist the user message (with any image attachments).
         sessionStore.appendMessage(.user(trimmed, attachments: attachments), to: sessionID)
 
+        // While streaming, skip the per-flush UserDefaults encode + disk write
+        // (the main cause of UI stutter); we'll force one save at the end.
+        sessionStore.persistPaused = true
+
         // Append a placeholder assistant message that fills as deltas land.
         let assistantMessage = ChatMessage.assistant()
         sessionStore.appendMessage(assistantMessage, to: sessionID)
@@ -195,6 +199,7 @@ final class ChatViewModel: ObservableObject {
                         }
                     }
 
+                    self.sessionStore.forcePersist()
                     self.isStreaming = false
                     self.streamTask = nil
                     self.streamingAssistantID = nil
@@ -250,17 +255,20 @@ final class ChatViewModel: ObservableObject {
                 }
 
                 // Stream finished normally.
+                self.sessionStore.forcePersist()
                 self.isStreaming = false
                 self.streamTask = nil
                 self.streamingAssistantID = nil
 
             } catch is CancellationError {
                 // User cancelled — keep any partial content.
+                self.sessionStore.forcePersist()
                 self.isStreaming = false
                 self.streamTask = nil
                 self.streamingAssistantID = nil
 
             } catch {
+                self.sessionStore.forcePersist()
                 self.isStreaming = false
                 self.streamTask = nil
                 self.streamingAssistantID = nil

@@ -14,6 +14,11 @@ final class SessionStore: ObservableObject {
 
     // MARK: - Published state
 
+    /// When true, persist() is a no-op. Set while the streaming pipeline
+    /// repeatedly updates the assistant message so we don't JSON-encode +
+    /// disk-write on every 50–100 ms flush (which stalls the main thread).
+    var persistPaused = false
+
     /// All saved sessions, most-recently-created first.
     @Published var sessions: [ChatSession] {
         didSet { persist() }
@@ -118,10 +123,17 @@ final class SessionStore: ObservableObject {
     // MARK: - Persistence
 
     private func persist() {
+        guard !persistPaused else { return }
         guard let data = try? JSONEncoder().encode(sessions) else { return }
         let defaults = UserDefaults.standard
         defaults.set(data, forKey: Self.sessionsKey)
         // Synchronous flush so chats survive an immediate quit / power loss.
         defaults.synchronize()
+    }
+
+    /// Writes once even if persistence was paused (called when streaming ends).
+    func forcePersist() {
+        persistPaused = false
+        persist()
     }
 }
