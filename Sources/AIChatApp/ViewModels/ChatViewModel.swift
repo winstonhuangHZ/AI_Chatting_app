@@ -50,11 +50,26 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Convenience
 
-    /// Helper that returns the system prompt enriched with the user profile.
+    /// Helper that returns the system prompt enriched with the user profile
+    /// and (optionally) the current date/time.
     private func buildSystemPrompt(for config: APIServerConfig) -> String {
         var prompt = config.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if prompt.isEmpty {
             prompt = APIServerConfig.defaultSystemPrompt
+        }
+
+        // Optionally tell the model what time it is "now".
+        if config.includeTimestamp {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "EEEE, MMM d, yyyy 'at' HH:mm"
+            let timeString = formatter.string(from: Date())
+            let timeZone = TimeZone.current.identifier
+
+            prompt += """
+
+            CURRENT TIME: \(timeString) (Time Zone: \(timeZone))
+            """
         }
 
         if let profileJSON = userProfileStore.jsonPayload {

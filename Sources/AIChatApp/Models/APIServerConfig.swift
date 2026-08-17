@@ -59,6 +59,10 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     /// response (false). Toggleable per profile.
     var streamEnabled: Bool
 
+    /// Whether the current date/time is attached to the system prompt so the
+    /// model is aware of "now" (time of day / day of week / date).
+    var includeTimestamp: Bool
+
     /// Multi-line text editor in settings; the default value helps the model
     /// produce nicely formatted Markdown the app will render.
     static let defaultSystemPrompt = """
@@ -93,7 +97,8 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         availableModels: [String] = [],
         modelPrices: [String: ModelPrice] = [:],
         systemPrompt: String = APIServerConfig.defaultSystemPrompt,
-        streamEnabled: Bool = true
+        streamEnabled: Bool = true,
+        includeTimestamp: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -104,6 +109,7 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         self.modelPrices = modelPrices
         self.systemPrompt = systemPrompt
         self.streamEnabled = streamEnabled
+        self.includeTimestamp = includeTimestamp
     }
 
     /// A friendly display name for UI lists.
@@ -129,5 +135,6 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
             ?? APIServerConfig.defaultSystemPrompt
         streamEnabled = try container.decodeIfPresent(Bool.self, forKey: .streamEnabled) ?? true
+        includeTimestamp = try container.decodeIfPresent(Bool.self, forKey: .includeTimestamp) ?? true
     }
 }

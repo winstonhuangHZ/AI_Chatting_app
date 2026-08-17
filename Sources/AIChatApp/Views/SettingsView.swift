@@ -250,10 +250,12 @@ private struct ProfileEditView: View {
 
                 Section {
                     Toggle("Streaming (逐字流式输出)", isOn: $draft.streamEnabled)
+
+                    Toggle("发送时间戳 (让模型感知当前日期/时段)", isOn: $draft.includeTimestamp)
                 } header: {
                     Text("Generation")
                 } footer: {
-                    Text("On → token-by-token streaming. Off → wait for the full reply, then show it.")
+                    Text("Streaming: On → 逐字显示. Time-stamp: On → system prompt 附带 CURRENT TIME.")
                 }
 
                 Section {
