@@ -91,6 +91,10 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
 
     To UPDATE an existing preference, just send the same category with the new value:
     <!-- PERSONALIZATION: {"preferences": [{"category": "language", "value": "English"}]} -->
+
+    TIME: If the user's request carries a CURRENT TIME line, treat that value as \
+    the actual current time. Never fabricate, guess, or invent a time — always use \
+    the provided CURRENT TIME verbatim.
     """
 
     // MARK: - Initializers

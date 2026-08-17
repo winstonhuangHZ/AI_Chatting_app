@@ -66,7 +66,22 @@ final class ChatViewModel: ObservableObject {
             prompt = APIServerConfig.defaultSystemPrompt
         }
 
-        // Optionally tell the model what time it is "now".
+        // 渐进增强：老配置里保存的 systemPrompt 可能缺少「删除/修改偏好」指令，
+        // 自动补齐，让模型可以按新协议更新 personalization。
+        let deleteMarker = "\"op\": \"remove\""
+        let updateMarker = "To UPDATE an existing preference"
+        if !prompt.contains(deleteMarker) || !prompt.contains(updateMarker) {
+            prompt += """
+
+            PERSONALIZATION OPS: You may modify the user profile preferences \
+            stored by the app. To DELETE an outdated preference, send:
+            <!-- PERSONALIZATION: {"preferences": [{"op": "remove", "category": "location"}]} -->
+            To UPDATE an existing preference, send the same category with a new value:
+            <!-- PERSONALIZATION: {"preferences": [{"category": "language", "value": "English"}]} -->
+            """
+        }
+
+        // Optionally tell the model what time it is "now" — and forbid inventing one.
         if config.includeTimestamp {
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -77,6 +92,9 @@ final class ChatViewModel: ObservableObject {
             prompt += """
 
             CURRENT TIME: \(timeString) (Time Zone: \(timeZone))
+            IMPORTANT: Use the CURRENT TIME above as the actual current time \
+            whenever the user asks about time/date. Never fabricate or guess a \
+            time — always treat the provided CURRENT TIME as ground truth.
             """
         }
 
