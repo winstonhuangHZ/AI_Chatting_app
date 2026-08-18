@@ -97,9 +97,10 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     To UPDATE an existing preference, just send the same category with the new value:
     <!-- PERSONALIZATION: {"preferences": [{"category": "language", "value": "English"}]} -->
 
-    TIME: If the user's request carries a CURRENT TIME line, treat that value as \
-    the actual current time. Never fabricate, guess, or invent a time — always use \
-    the provided CURRENT TIME verbatim.
+    TIME: The newest USER message may carry a leading timestamp in square \
+    brackets, e.g. "[2026-08-19 01:02:03] ...". It is injected by the app \
+    itself and represents the current time. Never fabricate, guess, or invent \
+    a time — always treat the provided timestamp as ground truth.
     """
 
     // MARK: - Initializers

@@ -152,40 +152,65 @@ final class ChatViewModel: ObservableObject {
             Emit it as soon as you know the preference; do not wait until the end.
             """
         }
+
+        // 渐进增强：告知模型「最新 user 消息开头的时间戳」是系统注入的当前时间。
+        let tsMarker = "TIMESTAMP NOTE"
+        if !prompt.contains(tsMarker) {
+            prompt += """
+
+            TIMESTAMP NOTE: The newest USER message may carry a leading timestamp \
+            in square brackets, e.g. "[2026-08-19 01:02:03] ...". It is injected \
+            by the app itself — treat it as the system-provided current time \
+            whenever the user asks about time/date. Never fabricate or guess a \
+            time; always use the provided timestamp as ground truth for "now".
+            """
+        }
         return prompt
     }
 
-    /// Builds the **dynamic** trailing context: current time + learned user
-    /// profile. Appended as the LAST message so the leading static prompt +
-    /// conversation history remain byte-identical and cache-friendly.
+    /// Builds the **dynamic** trailing context: learned user profile only.
     ///
-    /// Returns `nil` when there is nothing dynamic to send.
+    /// The current time no longer lives here — it is injected into the newest
+    /// user message (see `timestamppedHistory`) so the request's long static
+    /// prefix stays byte-identical AND the model still sees an exact timestamp
+    /// close to the question. Dynamic profile JSON remains the LAST message so
+    /// prefix caching is unaffected by profile edits.
+    ///
+    /// Returns `nil` when there is no profile data to send.
     private func buildContextMessage(for config: APIServerConfig) -> ChatMessage? {
-        var parts: [String] = []
+        guard let profileJSON = userProfileStore.jsonPayload else { return nil }
+        return .system("""
+        KNOWLEDGE ABOUT THE USER (use it to personalize your reply):
+        \(profileJSON)
+        """)
+    }
 
-        if config.includeTimestamp {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "EEEE, MMM d, yyyy 'at' HH:mm"
-            let timeString = formatter.string(from: Date())
-            let timeZone = TimeZone.current.identifier
-            parts.append("""
-            CURRENT TIME: \(timeString) (Time Zone: \(timeZone))
-            IMPORTANT: Use the CURRENT TIME above as the actual current time \
-            whenever the user asks about time/date. Never fabricate or guess a \
-            time — always treat the provided CURRENT TIME as ground truth.
-            """)
-        }
+    /// Prepends a precise (second-granularity) timestamp to the newest user
+    /// message — only in the copy sent to the API, never persisted to storage.
+    ///
+    /// Cache-optimization: the timestamp sits at the very end of the growing
+    /// history (the latest user message), so every older token (static system
+    /// prompt + previous turns) stays byte-identical across minutes → DeepSeek
+    /// & friends keep hitting the prefix cache while still giving the model an
+    /// exact "now" near the question.
+    private func timestamppedHistory(
+        _ history: [ChatMessage],
+        config: APIServerConfig
+    ) -> [ChatMessage] {
+        guard config.includeTimestamp,
+              var last = history.last,
+              last.role == .user,
+              !last.content.isEmpty else { return history }
 
-        if let profileJSON = userProfileStore.jsonPayload {
-            parts.append("""
-            KNOWLEDGE ABOUT THE USER (use it to personalize your reply):
-            \(profileJSON)
-            """)
-        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let stamp = formatter.string(from: Date())
 
-        guard !parts.isEmpty else { return nil }
-        return .system(parts.joined(separator: "\n\n"))
+        last.content = "[\(stamp)] \(last.content)"
+        var result = history
+        result[result.count - 1] = last
+        return result
     }
 
     /// The active session object, if any.
@@ -287,6 +312,10 @@ final class ChatViewModel: ObservableObject {
         let systemPrompt = buildSystemPrompt(for: config)
         history.insert(.system(systemPrompt), at: 0)
 
+        // 精确时间戳注入最新 user（不污染存储），前缀保持字节稳定。
+        history = timestamppedHistory(history, config: config)
+
+        // 动态偏好 JSON 保留在最后（动态 context 需在末尾以保前缀命中）。
         if let context = buildContextMessage(for: config) {
             history.append(context)
         }
@@ -355,7 +384,10 @@ final class ChatViewModel: ObservableObject {
         let systemPrompt = buildSystemPrompt(for: config)
         history.insert(.system(systemPrompt), at: 0)
 
-        // 缓存优化：动态上下文追加在末尾，静态前缀保持稳定。
+        // 精确时间戳注入最新 user（不污染存储），前缀保持字节稳定。
+        history = timestamppedHistory(history, config: config)
+
+        // 动态偏好 JSON 保留在最后（动态 context 需在末尾以保前缀命中）。
         if let context = buildContextMessage(for: config) {
             history.append(context)
         }
