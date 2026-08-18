@@ -2,6 +2,28 @@ import Foundation
 import Combine
 import AppKit
 
+/// A transient toast describing a memory (user-profile) change the AI made.
+struct MemoryNotice: Identifiable, Equatable {
+    /// Stable identity so SwiftUI can animate toasts in/out.
+    let id: UUID
+
+    /// Number of preferences added or updated.
+    let addedCount: Int
+
+    /// Number of preferences removed.
+    let removedCount: Int
+
+    /// When the change happened.
+    let timestamp: Date
+
+    init(id: UUID = UUID(), addedCount: Int, removedCount: Int, timestamp: Date) {
+        self.id = id
+        self.addedCount = addedCount
+        self.removedCount = removedCount
+        self.timestamp = timestamp
+    }
+}
+
 /// Drives the active chat session: sending messages, consuming the SSE
 /// stream, and accumulating response tokens into the assistant message.
 ///
@@ -39,6 +61,9 @@ final class ChatViewModel: ObservableObject {
     /// "Waiting for response…" → "Generating…" two-stage indicator.
     @Published var hasReceivedFirstToken = false
 
+    /// User-facing toast when the model added/updated/removed memories.
+    @Published var memoryNotice: MemoryNotice?
+
     /// User-facing error banner text (nil hides the banner).
     @Published var errorMessage: String?
 
@@ -56,10 +81,45 @@ final class ChatViewModel: ObservableObject {
     /// Tracks the assistant message id currently being filled.
     var streamingAssistantID: UUID?
 
+    // MARK: - Memory application
+
+    /// Applies parsed profile changes and surfaces a UI toast so the user
+    /// knows their memory was silently modified by the AI.
+    private func applyProfileChanges(_ changes: ProfileChanges) {
+        var added = 0
+        var removed = 0
+
+        for p in changes.upserts {
+            // True "added" vs "updated" is hard to know for sure from the
+            // model's perspective; count every upsert as an add/update.
+            userProfileStore.upsert(category: p.category, value: p.value)
+            added += 1
+        }
+        for cat in changes.removes {
+            let before = userProfileStore.preferences.filter {
+                $0.category.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    == cat.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            }.count
+            userProfileStore.removeAll(category: cat)
+            removed += before
+        }
+
+        guard added > 0 || removed > 0 else { return }
+        memoryNotice = MemoryNotice(
+            addedCount: added,
+            removedCount: removed,
+            timestamp: Date()
+        )
+    }
+
     // MARK: - Convenience
 
-    /// Helper that returns the system prompt enriched with the user profile
-    /// and (optionally) the current date/time.
+    /// Builds the **static** system prompt.
+    ///
+    /// Cache-optimization: this string is byte-for-byte stable across requests
+    /// (no timestamp, no profile JSON), so the relay's prompt-cache prefix is
+    /// maximized. Dynamic context (current time + user profile) is appended as
+    /// a separate trailing system message by `buildContextMessage`.
     private func buildSystemPrompt(for config: APIServerConfig) -> String {
         var prompt = config.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if prompt.isEmpty {
@@ -80,32 +140,52 @@ final class ChatViewModel: ObservableObject {
             <!-- PERSONALIZATION: {"preferences": [{"category": "language", "value": "English"}]} -->
             """
         }
+        // 渐进增强：老配置可能没有「标记可放开头/结尾」的说明，自动补齐，
+        // 避免模型只在回复末尾才想起写个人化标记而漏掉。
+        let startMarker = "AT THE VERY START"
+        if !prompt.contains(startMarker) {
+            prompt += """
 
-        // Optionally tell the model what time it is "now" — and forbid inventing one.
+            PERSONALIZATION PLACEMENT: The invisible PERSONALIZATION note may be \
+            placed AT THE VERY START of your reply (before the visible answer) \
+            OR at the very end — both are detected and stripped automatically. \
+            Emit it as soon as you know the preference; do not wait until the end.
+            """
+        }
+        return prompt
+    }
+
+    /// Builds the **dynamic** trailing context: current time + learned user
+    /// profile. Appended as the LAST message so the leading static prompt +
+    /// conversation history remain byte-identical and cache-friendly.
+    ///
+    /// Returns `nil` when there is nothing dynamic to send.
+    private func buildContextMessage(for config: APIServerConfig) -> ChatMessage? {
+        var parts: [String] = []
+
         if config.includeTimestamp {
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.dateFormat = "EEEE, MMM d, yyyy 'at' HH:mm"
             let timeString = formatter.string(from: Date())
             let timeZone = TimeZone.current.identifier
-
-            prompt += """
-
+            parts.append("""
             CURRENT TIME: \(timeString) (Time Zone: \(timeZone))
             IMPORTANT: Use the CURRENT TIME above as the actual current time \
             whenever the user asks about time/date. Never fabricate or guess a \
             time — always treat the provided CURRENT TIME as ground truth.
-            """
+            """)
         }
 
         if let profileJSON = userProfileStore.jsonPayload {
-            prompt += """
-
+            parts.append("""
             KNOWLEDGE ABOUT THE USER (use it to personalize your reply):
             \(profileJSON)
-            """
+            """)
         }
-        return prompt
+
+        guard !parts.isEmpty else { return nil }
+        return .system(parts.joined(separator: "\n\n"))
     }
 
     /// The active session object, if any.
@@ -198,11 +278,18 @@ final class ChatViewModel: ObservableObject {
 
         // 构建历史：删除后的会话全部消息（应以上一条 user 消息结尾）+
         // system prompt。使用 `activeSession`（VM 单一数据源）。
+        //
+        // 缓存优化：静态 system prompt 在最前，动态上下文（时间+偏好）
+        // 作为最后一条 system 消息，保持前缀字节不变以提高中继缓存命中。
         var history = activeSession?.messages
             .filter { !$0.content.isEmpty || !$0.attachments.isEmpty } ?? []
 
         let systemPrompt = buildSystemPrompt(for: config)
         history.insert(.system(systemPrompt), at: 0)
+
+        if let context = buildContextMessage(for: config) {
+            history.append(context)
+        }
 
         startGeneration(
             sessionID: sessionID,
@@ -267,6 +354,11 @@ final class ChatViewModel: ObservableObject {
 
         let systemPrompt = buildSystemPrompt(for: config)
         history.insert(.system(systemPrompt), at: 0)
+
+        // 缓存优化：动态上下文追加在末尾，静态前缀保持稳定。
+        if let context = buildContextMessage(for: config) {
+            history.append(context)
+        }
 
         startGeneration(
             sessionID: sessionID,
@@ -344,12 +436,7 @@ final class ChatViewModel: ObservableObject {
                     self.hasReceivedFirstToken = false
 
                     if let changes = UserProfileStore.parse(from: accumulated) {
-                        for cat in changes.removes {
-                            self.userProfileStore.removeAll(category: cat)
-                        }
-                        for p in changes.upserts {
-                            self.userProfileStore.upsert(category: p.category, value: p.value)
-                        }
+                        self.applyProfileChanges(changes)
                     }
 
                     self.sessionStore.forcePersist()
@@ -406,12 +493,7 @@ final class ChatViewModel: ObservableObject {
                 // After the full reply arrives, parse & store any new
                 // personalization the model detected.
                 if let changes = UserProfileStore.parse(from: accumulated) {
-                    for cat in changes.removes {
-                        self.userProfileStore.removeAll(category: cat)
-                    }
-                    for p in changes.upserts {
-                        self.userProfileStore.upsert(category: p.category, value: p.value)
-                    }
+                    self.applyProfileChanges(changes)
                 }
 
                 // Stream finished normally.
@@ -447,17 +529,22 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    /// Removes the invisible `<!-- PERSONALIZATION: ... -->` wrapper from a
-    /// reply so it never shows in the rendered bubble or the stored message.
+    /// Removes **all** invisible `<!-- PERSONALIZATION: ... -->` wrappers from
+    /// a reply so they never show in the rendered bubble or stored message.
+    ///
+    /// The model may emit the marker at the START, MIDDLE, or END of a reply;
+    /// every occurrence is stripped (the parser accepts any location too).
     private static func stripPersonalization(from text: String) -> String {
-        guard let start = text.range(of: "<!-- PERSONALIZATION:") else { return text }
-        guard let end = text.range(of: "-->", range: start.upperBound..<text.endIndex) else {
-            return String(text[..<start.lowerBound])
-        }
         var result = text
-        result.removeSubrange(start.lowerBound..<end.upperBound)
-        return result
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        while let start = result.range(of: "<!-- PERSONALIZATION:") {
+            guard let end = result.range(of: "-->", range: start.upperBound..<result.endIndex) else {
+                // Unterminated marker — drop everything from the marker on.
+                result = String(result[..<start.lowerBound])
+                break
+            }
+            result.removeSubrange(start.lowerBound..<end.upperBound)
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Stops the in-flight stream and saves partial content.

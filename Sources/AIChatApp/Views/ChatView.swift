@@ -75,6 +75,25 @@ struct ChatView: View {
                 lastMessageID = session.messages.last?.id
             }
         }
+        // Memory-change toast (auto-dismisses after 4s).
+        .overlay(alignment: .bottom) {
+            if let notice = chatViewModel.memoryNotice {
+                MemoryNoticeBanner(notice: notice) {
+                    chatViewModel.memoryNotice = nil
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .padding(.horizontal, 12)
+                .padding(.bottom, 92)
+                .id(notice.id)
+                .task(id: notice.id) {
+                    try? await Task.sleep(for: .seconds(4))
+                    if chatViewModel.memoryNotice?.id == notice.id {
+                        chatViewModel.memoryNotice = nil
+                    }
+                }
+            }
+        }
+        .animation(.default, value: chatViewModel.memoryNotice)
         // Error banner.
         .overlay(alignment: .top) {
             if let error = chatViewModel.errorMessage {
@@ -88,6 +107,64 @@ struct ChatView: View {
             }
         }
         .animation(.default, value: chatViewModel.errorMessage)
+    }
+}
+
+// MARK: - Memory-change toast
+
+/// Small transient toast shown when the AI added/updated/removed memories.
+private struct MemoryNoticeBanner: View {
+
+    /// The memory-change event to display.
+    let notice: MemoryNotice
+
+    /// Dismiss action.
+    let onDismiss: () -> Void
+
+    @EnvironmentObject private var localization: LocalizationManager
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "brain")
+                .foregroundStyle(.tint)
+            Text(message)
+                .font(.callout)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.accentColor.opacity(0.25), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+    }
+
+    private var message: String {
+        var parts: [String] = []
+        if notice.addedCount > 0 {
+            parts.append(addedText(notice.addedCount))
+        }
+        if notice.removedCount > 0 {
+            parts.append(removedText(notice.removedCount))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func addedText(_ n: Int) -> String {
+        // "Memory added/updated (n)"
+        L("memory.added") + " (\(n))"
+    }
+
+    private func removedText(_ n: Int) -> String {
+        L("memory.removed") + " (\(n))"
     }
 }
 

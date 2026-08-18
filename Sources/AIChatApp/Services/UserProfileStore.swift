@@ -124,7 +124,9 @@ final class UserProfileStore: ObservableObject {
     ///
     /// Returns `nil` when the marker is absent or nothing usable is found.
     static func parse(from reply: String) -> ProfileChanges? {
-        // Locate the marker: <!-- PERSONALIZATION: ... -->
+        // Locate ANY marker: <!-- PERSONALIZATION: ... -->.
+        // The model may place it at the start (leading instruction),
+        // in the middle, or at the end of the reply.
         guard let lowerBound = reply.range(of: "<!-- PERSONALIZATION:") else { return nil }
         let afterWrapper = reply[lowerBound.upperBound...]
         guard let endOfBlock = afterWrapper.range(of: "-->") else { return nil }

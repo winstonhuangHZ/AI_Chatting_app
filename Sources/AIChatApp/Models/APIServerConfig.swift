@@ -76,10 +76,15 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     PERSONALIZATION: You know the user's profile prefs (KNOWLEDGE ABOUT THE USER) \
     and the user's current message. When the user clearly states a NEW preference \
     or characteristic (e.g. "I am left-handed", "I prefer short explanations", \
-    "I live in Shanghai"), append an invisible note at the very end of your reply \
-    using EXACTLY this format (a single line, no extra text):
+    "I live in Shanghai"), include an invisible note in your reply using EXACTLY \
+    this format (a single line, no extra text):
 
     <!-- PERSONALIZATION: {"preferences": [{"category": "topic", "value": "..."}]} -->
+
+    You may place the note AT THE VERY START of your reply (before the visible \
+    answer) OR at the very end — both are detected and stripped automatically. \
+    Emit it as soon as you know the preference; do not wait until the end, and \
+    do not forget to emit it before your final message ends.
 
     Match your words' meaning, and use categories like: topic, language, \
     tone, format, location, accessibility, domain, tooling. Do NOT include \
