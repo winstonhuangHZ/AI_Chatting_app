@@ -39,6 +39,102 @@ enum OpenAIServiceError: LocalizedError, Equatable {
     }
 }
 
+// MARK: - Deterministic payload encoding
+//
+// CRITICAL CACHE NOTE:
+// `JSONSerialization.data(withJSONObject:)` on a `[String: Any]` dictionary
+// does NOT guarantee a stable key order between process runs. Cloud prompt
+// caches hash the exact request bytes; a reordered key makes every request
+// look "new" and the cache NEVER hits.
+//
+// Codable structs emit fields in declaration order — deterministic and
+// byte-stable across runs — so we use them for the chat request body.
+
+/// Top-level `/v1/chat/completions` request body with stable field order.
+private struct ChatPayload: Encodable {
+    let model: String
+    let messages: [PayloadMessage]
+    let stream: Bool
+
+    /// DeepSeek-reasoner-compatible relays require `enable_thinking: false`
+    /// for non-streaming; nil omits the field entirely (streaming path).
+    var enable_thinking: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case messages
+        case stream
+        case enable_thinking
+    }
+
+    /// Custom encode: `enable_thinking` is emitted ONLY when non-nil so the
+    /// streaming payload stays byte-identical to a standard OpenAI request
+    /// (no `"enable_thinking": null` pollution that breaks cache matches or
+    /// strict backends).
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(model, forKey: .model)
+        try container.encode(messages, forKey: .messages)
+        try container.encode(stream, forKey: .stream)
+        if let enable_thinking {
+            try container.encode(enable_thinking, forKey: .enable_thinking)
+        }
+    }
+}
+
+/// A single message in the payload (`role` + `content`).
+private struct PayloadMessage: Encodable {
+    let role: String
+    let content: PayloadContent
+}
+
+/// Message content: either a plain string or an array of content parts
+/// (text / image_url for multimodal requests).
+private enum PayloadContent: Encodable {
+    case text(String)
+    case parts([PayloadContentPart])
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .text(let string):
+            try container.encode(string)
+        case .parts(let parts):
+            try container.encode(parts)
+        }
+    }
+}
+
+/// One entry of a multimodal content array.
+private struct PayloadContentPart: Encodable {
+    let type: String
+    let text: String?
+    let image_url: PayloadImageURL?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case text
+        case image_url
+    }
+
+    /// Only non-nil fields are emitted (keeps the bytes minimal + stable).
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(type, forKey: .type)
+        if let text {
+            try container.encode(text, forKey: .text)
+        }
+        if let image_url {
+            try container.encode(image_url, forKey: .image_url)
+        }
+    }
+}
+
+/// `image_url` part body.
+private struct PayloadImageURL: Encodable {
+    let url: String
+}
+
 /// A lightweight, actor-isolated client for OpenAI-compatible relay servers.
 ///
 /// All network work uses `URLSession` with the modern async/await APIs:
@@ -100,6 +196,56 @@ actor OpenAIService {
         configuration.timeoutIntervalForResource = 300
         configuration.waitsForConnectivity = true
         self.session = URLSession(configuration: configuration)
+    }
+
+    // MARK: - Payload builders
+
+    /// Builds the wire-format `messages` array.
+    ///
+    /// Model-switch safety: when the current model is NOT multimodal, any
+    /// image attachments in history are downgraded to plain text so the
+    /// request never fails AND the giant base64 never participates in the
+    /// prompt prefix (which would wreck upstream caching for everyone).
+    ///   - text + images  → keep the text, drop the images
+    ///   - images only    → replace with a short placeholder
+    private static func payloadMessages(
+        from messages: [ChatMessage],
+        model: String
+    ) -> [PayloadMessage] {
+        let isVision = MultimodalSupport.isMultimodal(model)
+
+        return messages.map { message in
+            if !message.attachments.isEmpty && isVision {
+                // Multimodal model: standard image_url parts list.
+                var parts: [PayloadContentPart] = []
+                if !message.content.isEmpty {
+                    parts.append(PayloadContentPart(
+                        type: "text",
+                        text: message.content,
+                        image_url: nil
+                    ))
+                }
+                for attachment in message.attachments {
+                    parts.append(PayloadContentPart(
+                        type: "image_url",
+                        text: nil,
+                        image_url: PayloadImageURL(url: attachment.dataURI)
+                    ))
+                }
+                return PayloadMessage(role: message.role.rawValue, content: .parts(parts))
+
+            } else if !message.attachments.isEmpty && !isVision {
+                // Non-multimodal model: downgrade images to a text note.
+                let note = "[图片已附加但当前模型不支持视觉，已忽略]"
+                let content = message.content.isEmpty
+                    ? note
+                    : message.content + "\n\n" + note
+                return PayloadMessage(role: message.role.rawValue, content: .text(content))
+
+            } else {
+                return PayloadMessage(role: message.role.rawValue, content: .text(message.content))
+            }
+        }
     }
 
     // MARK: - URL normalization
@@ -258,42 +404,16 @@ actor OpenAIService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
 
-        // Build the wire-format message payload.
-        let payloadMessages: [[String: Any]] = messages.map { message -> [String: Any] in
-            var result: [String: Any] = ["role": message.role.rawValue]
-
-            if !message.attachments.isEmpty {
-                var contentParts: [[String: Any]] = []
-                if !message.content.isEmpty {
-                    contentParts.append([
-                        "type": "text",
-                        "text": message.content
-                    ])
-                }
-                for attachment in message.attachments {
-                    contentParts.append([
-                        "type": "image_url",
-                        "image_url": [
-                            "url": attachment.dataURI
-                        ]
-                    ])
-                }
-                result["content"] = contentParts
-            } else {
-                result["content"] = message.content
-            }
-
-            return result
-        }
-
-        let body: [String: Any] = [
-            "model": model,
-            "messages": payloadMessages,
-            "stream": true
-        ]
+        // Deterministic body: field order is fixed by the Codable structs so
+        // identical payloads produce byte-identical requests → cloud cache works.
+        let payload = ChatPayload(
+            model: model,
+            messages: Self.payloadMessages(from: messages, model: model),
+            stream: true
+        )
 
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            request.httpBody = try JSONEncoder().encode(payload)
         } catch {
             throw OpenAIServiceError.transport(
                 "Failed to encode request body: \(error.localizedDescription)"
@@ -410,37 +530,17 @@ actor OpenAIService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        let payloadMessages: [[String: Any]] = messages.map { message -> [String: Any] in
-            var result: [String: Any] = ["role": message.role.rawValue]
-            if !message.attachments.isEmpty {
-                var contentParts: [[String: Any]] = []
-                if !message.content.isEmpty {
-                    contentParts.append(["type": "text", "text": message.content])
-                }
-                for attachment in message.attachments {
-                    contentParts.append([
-                        "type": "image_url",
-                        "image_url": ["url": attachment.dataURI]
-                    ])
-                }
-                result["content"] = contentParts
-            } else {
-                result["content"] = message.content
-            }
-            return result
-        }
-
-        // Non-streaming DeepSeek-reasoner-compatible relays require
-        // `enable_thinking: false` (thinking only works in streaming mode).
-        let body: [String: Any] = [
-            "model": model,
-            "messages": payloadMessages,
-            "stream": false,
-            "enable_thinking": false
-        ]
+        // Deterministic body with `enable_thinking: false` for non-streaming
+        // DeepSeek-reasoner-compatible relays (thinking needs streaming).
+        let payload = ChatPayload(
+            model: model,
+            messages: Self.payloadMessages(from: messages, model: model),
+            stream: false,
+            enable_thinking: false
+        )
 
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            request.httpBody = try JSONEncoder().encode(payload)
         } catch {
             throw OpenAIServiceError.transport("Failed to encode body: \(error.localizedDescription)")
         }
