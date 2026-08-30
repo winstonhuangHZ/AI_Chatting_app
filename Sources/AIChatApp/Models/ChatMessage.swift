@@ -97,6 +97,19 @@ struct DocumentAttachment: Identifiable, Codable, Hashable {
     }
 }
 
+/// A clickable source reference (web_search / web_fetch result) attached to an
+/// assistant reply in Agent mode. Rendered as a "Sources" card under the bubble.
+struct ChatSource: Identifiable, Codable, Hashable {
+    /// Display title (page title for search hits, host for fetched pages).
+    var title: String
+
+    /// Absolute http(s) URL.
+    var url: String
+
+    /// Identity = URL so duplicates collapse across tool calls.
+    var id: String { url }
+}
+
 /// A single message within a `ChatSession`.
 ///
 /// Content is the fully accumulated text. When streaming, the assistant
@@ -122,6 +135,9 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     /// When the message was created.
     var timestamp: Date
 
+    /// Source references (web tools) rendered below assistant replies.
+    var sources: [ChatSource]
+
     // MARK: - Initializers
 
     init(
@@ -130,7 +146,8 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         content: String,
         attachments: [ImageAttachment] = [],
         documentAttachments: [DocumentAttachment] = [],
-        timestamp: Date = Date()
+        timestamp: Date = Date(),
+        sources: [ChatSource] = []
     ) {
         self.id = id
         self.role = role
@@ -138,6 +155,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         self.attachments = attachments
         self.documentAttachments = documentAttachments
         self.timestamp = timestamp
+        self.sources = sources
     }
 
     /// Convenience factory for user messages (with optional image attachments).
@@ -176,5 +194,6 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         attachments = try container.decodeIfPresent([ImageAttachment].self, forKey: .attachments) ?? []
         documentAttachments = try container.decodeIfPresent([DocumentAttachment].self, forKey: .documentAttachments) ?? []
         timestamp = try container.decode(Date.self, forKey: .timestamp)
+        sources = try container.decodeIfPresent([ChatSource].self, forKey: .sources) ?? []
     }
 }

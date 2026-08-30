@@ -115,3 +115,16 @@
 - [x] `web_fetch` 解析 WebPageReader（script/style 剔除 → 块级标签转行 → 去标签 → 实体解码 → 空白折叠）
 - [x] 构建 + 打包 + 启动冒烟通过；geocoding / forecast API 返回结构与解析逻辑逐字段核对
 
+---
+
+## 附加：Agent 消息来源引用（Perplexity 式来源卡）
+
+- [x] **`ChatMessage.swift`**：新增 `ChatSource`（title + url，Identifiable/Codable/Hashable）；`ChatMessage.sources: [ChatSource]`（Codable 向后兼容，旧数据无 `sources` key 时默认 `[]`）
+- [x] **`OpenAIService.swift`**：`ChatStreamEvent` 新增 `.sources([ChatSource])`；工具循环执行 web_search/web_fetch 后收集来源，finish 前一次性 yield
+- [x] **`ChatTools.swift`**：`BuiltinTool` 新增 `extractSources`（默认空）；`web_search` 解析 `N. 标题 / url` 块（去重、剥离尾部噪声标点、保留配对括号），`web_fetch` 解析 `Page: <url>` 行（title = host）；`ChatTools.sources(for:result:)` 查询入口
+- [x] **`SessionStore.swift`**：新增 `updateLastAssistantSources(_:in:)`
+- [x] **`ChatViewModel.swift`**：`consumeToolEvents` 收集 `.sources` 事件并写入最终 assistant 消息
+- [x] **`ChatView.swift`**：assistant 消息气泡下方渲染「来源」卡（仅非流式 + sources 非空时显示；可点击链接打开浏览器；控件背景 + 细边框，Claude 主题下清晰可辨）
+- [x] **`AppLanguage.swift`**：`sources.title` 六语言（Sources / 来源 / Sources / Fuentes / Источники / المصادر）
+- [x] 解析逻辑独立脚本验证：中文标题、括号 URL（维基消歧义）、尾部噪声剥除、无效 URL 拒绝，全部通过；构建 + 打包 + 启动冒烟通过
+

@@ -626,6 +626,7 @@ final class ChatViewModel: ObservableObject {
     ) async throws {
         var accumulated = ""
         var lastFlush = ContinuousClock.now
+        var collectedSources: [ChatSource] = []
 
         for try await event in stream {
             // If the user switched sessions mid-stream, stop writing.
@@ -660,6 +661,8 @@ final class ChatViewModel: ObservableObject {
                         in: sessionID
                     )
                 }
+            case .sources(let list):
+                collectedSources.append(contentsOf: list)
             }
         }
 
@@ -668,6 +671,11 @@ final class ChatViewModel: ObservableObject {
             Self.stripPersonalization(from: accumulated),
             in: sessionID
         )
+
+        // Attach web-source references collected during the tool loop.
+        if !collectedSources.isEmpty {
+            sessionStore.updateLastAssistantSources(collectedSources, in: sessionID)
+        }
 
         // After the full reply arrives, parse & store any new personalization.
         if let changes = UserProfileStore.parse(from: accumulated) {

@@ -273,6 +273,9 @@ enum ChatStreamEvent: Sendable {
 
     /// A tool finished executing.
     case toolFinished(String)
+
+    /// Source references collected from web tools (rendered below the answer).
+    case sources([ChatSource])
 }
 
 /// Accumulates fragmented streaming tool-call deltas for one index.
@@ -702,6 +705,7 @@ actor OpenAIService {
                     var history = await Self.payloadMessages(from: messages, model: model)
                     var round = 0
                     var gotFinalAnswer = false
+                    var collectedSources: [ChatSource] = []
 
                     while round < maxRounds {
                         round += 1
@@ -750,6 +754,7 @@ actor OpenAIService {
                                 result = "Error executing tool \(toolName): \(error.localizedDescription)"
                             }
                             continuation.yield(.toolFinished(toolName))
+                            collectedSources.append(contentsOf: ChatTools.sources(for: acc.name, result: result))
                             history.append(.toolResult(PayloadToolResultMessage(
                                 tool_call_id: acc.id.isEmpty ? "call_\(toolName)" : acc.id,
                                 content: result
@@ -772,6 +777,11 @@ actor OpenAIService {
                         if !outcome.yieldedText {
                             throw OpenAIServiceError.emptyStream
                         }
+                    }
+
+                    // Deliver collected sources (web references) before finishing.
+                    if !collectedSources.isEmpty {
+                        continuation.yield(.sources(collectedSources))
                     }
 
                     continuation.finish()

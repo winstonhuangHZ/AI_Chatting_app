@@ -455,6 +455,12 @@ private struct MessageBubble: View {
                     .padding(.leading, 4)
                 }
 
+                // Sources card below AI replies (Agent mode web references).
+                if message.role == .assistant && !isStreaming && !message.sources.isEmpty {
+                    sourcesCard
+                        .padding(.top, 2)
+                }
+
                 // Quick actions below AI messages: Retry / Copy / Delete.
                 if message.role == .assistant && !isStreaming {
                     messageActionBar
@@ -492,6 +498,51 @@ private struct MessageBubble: View {
                 Label(L("msg.delete"), systemImage: "trash")
             }
         }
+    }
+
+    // MARK: - Sources card
+
+    /// "📎 来源" card listing the web references collected from web_search /
+    /// web_fetch during the tool loop. Clickable links open in the browser.
+    @ViewBuilder
+    private var sourcesCard: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(L("sources.title"))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            ForEach(message.sources) { source in
+                Link(destination: Self.sourceURL(source.url)) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "link")
+                            .font(.system(size: 10))
+                            .foregroundStyle(appearance.accentColor)
+                        Text(source.title.isEmpty ? source.url : source.title)
+                            .font(.system(size: 11))
+                            .foregroundStyle(appearance.accentColor)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help(source.url)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+        .frame(maxWidth: 620, alignment: .leading)
+    }
+
+    private static func sourceURL(_ string: String) -> URL {
+        URL(string: string) ?? URL(string: "https://")!
     }
 
     // MARK: - Quick action bar (below assistant messages)

@@ -18,6 +18,24 @@ struct BuiltinTool {
 
     /// Executes the tool and returns a plain-text result.
     let execute: (_ arguments: [String: Any]) async throws -> String
+
+    /// Extracts structured source references (title + URL) from a tool result,
+    /// so the service can render a "Sources" card under the final answer.
+    let extractSources: (_ result: String) -> [ChatSource]
+
+    init(
+        name: String,
+        description: String,
+        parameters: [String: Any],
+        extractSources: @escaping (_ result: String) -> [ChatSource] = { _ in [] },
+        execute: @escaping (_ arguments: [String: Any]) async throws -> String
+    ) {
+        self.name = name
+        self.description = description
+        self.parameters = parameters
+        self.extractSources = extractSources
+        self.execute = execute
+    }
 }
 
 /// Registry + execution for the built-in tools offered to the model.
@@ -45,6 +63,13 @@ enum ChatTools {
         return try await tool.execute(arguments)
     }
 
+    /// Returns the source references (title + URL) a tool attached to its result,
+    /// for the "Sources" card under the final assistant message.
+    static func sources(for name: String, result: String) -> [ChatSource] {
+        guard let tool = all.first(where: { $0.name == name }) else { return [] }
+        return tool.extractSources(result)
+    }
+
     // MARK: - web_fetch
 
     private static let webFetch = BuiltinTool(
@@ -56,7 +81,8 @@ enum ChatTools {
                 "url": ["type": "string", "description": "The full http(s) URL to fetch and read"],
             ],
             "required": ["url"],
-        ]
+        ],
+        extractSources: { result in WebPageReader.parseSource(from: result) }
     ) { arguments in
         guard let url = arguments["url"] as? String,
               !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -130,7 +156,8 @@ enum ChatTools {
                 "query": ["type": "string", "description": "The search query"],
             ],
             "required": ["query"],
-        ]
+        ],
+        extractSources: { result in WebSearch.parseSources(from: result) }
     ) { arguments in
         guard let query = arguments["query"] as? String,
               !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -152,6 +179,45 @@ enum WebSearch {
             return result
         }
         return try await htmlSearch(query, maxResults: maxResults)
+    }
+
+    /// Parses the `1. Title / snippet / url` blocks produced by `htmlSearch`
+    /// back into structured source references (deduplicated by URL).
+    static func parseSources(from result: String) -> [ChatSource] {
+        var sources: [ChatSource] = []
+        var seen = Set<String>()
+        var currentTitle = ""
+        for line in result.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let numberRange = trimmed.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
+                currentTitle = String(trimmed[numberRange.upperBound...])
+                    .trimmingCharacters(in: .whitespaces)
+                continue
+            }
+            guard let urlRange = trimmed.range(of: #"https?://[^\s]+"#, options: .regularExpression) else {
+                continue
+            }
+            var url = String(trimmed[urlRange])
+            // Strip trailing noise punctuation only (keep legal URL parens).
+            let noise = CharacterSet(charactersIn: ".,;:!?\"'`’‘“”»«…")
+            while let last = url.unicodeScalars.last, noise.contains(last) {
+                url.removeLast()
+            }
+            // Balance parens: drop surplus closing parens (e.g. "url).").
+            let open = url.filter { $0 == "(" }.count
+            var close = url.filter { $0 == ")" }.count
+            while close > open {
+                url.removeLast()
+                close -= 1
+            }
+            guard let parsed = URL(string: url),
+                  parsed.scheme == "http" || parsed.scheme == "https",
+                  !seen.contains(url) else { continue }
+            seen.insert(url)
+            sources.append(ChatSource(title: currentTitle, url: url))
+            currentTitle = ""
+        }
+        return sources
     }
 
     // MARK: Instant Answer API
@@ -325,6 +391,18 @@ enum WebPageReader {
             ? String(text.prefix(maxContentChars)) + "\n…[truncated]"
             : text
         return "Page: \(url.absoluteString)\n\n\(truncated)"
+    }
+
+    /// Parses the leading `Page: <url>` line of a `read()` result into a source
+    /// item (title = host, since the page's own title is not extracted).
+    static func parseSource(from result: String) -> [ChatSource] {
+        let lines = result.components(separatedBy: .newlines)
+        guard let first = lines.first, first.hasPrefix("Page: ") else { return [] }
+        let url = String(first.dropFirst("Page: ".count))
+            .trimmingCharacters(in: .whitespaces)
+        guard let parsed = URL(string: url),
+              parsed.scheme == "http" || parsed.scheme == "https" else { return [] }
+        return [ChatSource(title: parsed.host ?? url, url: url)]
     }
 
     /// Strips script/style, removes tags, decodes entities, collapses whitespace.
