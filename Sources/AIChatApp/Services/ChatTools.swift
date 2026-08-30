@@ -56,7 +56,10 @@ enum ChatTools {
     static let getTime = BuiltinTool(
         name: "get_time",
         description: "Returns the current date and time in \"yyyy-MM-dd HH:mm:ss\" (server-local). Call it whenever the user asks what time or date it is, or needs a precise \"now\". Never guess the time.",
-        parameters: [:]
+        parameters: [
+            "type": "object",
+            "properties": [:],
+        ]
     ) { _ in
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
