@@ -339,23 +339,29 @@ private struct MessageList: View {
                 }
                 .padding(16)
             }
+            // Anchor content growth at the bottom: streaming replies extend
+            // below the viewport instead of pushing the window "up"; the
+            // system re-anchors smoothly (macOS 14+ `.smooth` easing).
+            .defaultScrollAnchor(.bottom)
             .onChange(of: lastMessageID) { _, newID in
                 if let newID {
-                    withAnimation(.easeOut(duration: 0.2)) {
+                    withAnimation(.smooth(duration: 0.25)) {
                         proxy.scrollTo(newID, anchor: .bottom)
                     }
                 }
             }
             .onChange(of: highlightMessageID) { _, newID in
                 if let newID {
-                    withAnimation(.easeInOut(duration: 0.3)) {
+                    withAnimation(.smooth(duration: 0.3)) {
                         proxy.scrollTo(newID, anchor: .center)
                     }
                 }
             }
             .onAppear {
                 if let id = session.messages.last?.id {
-                    proxy.scrollTo(id, anchor: .bottom)
+                    withAnimation(.smooth(duration: 0.2)) {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
                 }
             }
         }
