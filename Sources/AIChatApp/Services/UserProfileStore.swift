@@ -97,14 +97,22 @@ final class UserProfileStore: ObservableObject {
     // MARK: - Encoding for the prompt
 
     /// JSON snapshot of all preferences (or nil when empty).
+    ///
+    /// `.sortedKeys` makes the serialization deterministic: Swift Dictionary
+    /// hash order is random per construction, so without it every request
+    /// would send a slightly different profile JSON and break DeepSeek's
+    /// byte-identical prefix cache.
     var jsonPayload: String? {
         guard !preferences.isEmpty else { return nil }
 
         let payload: [[String: String]] = preferences.map {
             ["category": $0.category, "value": $0.value]
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]),
-              let str = String(data: data, encoding: .utf8) else {
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: payload,
+            options: [.prettyPrinted, .sortedKeys]
+        ),
+        let str = String(data: data, encoding: .utf8) else {
             return nil
         }
         return str

@@ -311,9 +311,11 @@ final class ChatViewModel: ObservableObject {
         let systemPrompt = buildSystemPrompt(for: config)
         history.insert(.system(systemPrompt), at: 0)
 
-        // 动态偏好 JSON 保留在最后（动态 context 需在末尾以保前缀命中）。
+        // 动态偏好 JSON 紧跟 system prompt 放在最前：上一轮请求的完整
+        // messages 单元会成为下一轮的前缀，DeepSeek 的“完整单元匹配”
+        // 缓存才能每轮命中历史（放末尾会让每轮单元都含不同结尾而无法匹配）。
         if let context = buildContextMessage(for: config) {
-            history.append(context)
+            history.insert(context, at: 1)
         }
 
 
@@ -385,9 +387,11 @@ final class ChatViewModel: ObservableObject {
         let systemPrompt = buildSystemPrompt(for: config)
         history.insert(.system(systemPrompt), at: 0)
 
-        // 动态偏好 JSON 保留在最后（动态 context 需在末尾以保前缀命中）。
+        // 动态偏好 JSON 紧跟 system prompt 放在最前：上一轮请求的完整
+        // messages 单元会成为下一轮的前缀，DeepSeek 的“完整单元匹配”
+        // 缓存才能每轮命中历史（放末尾会让每轮单元都含不同结尾而无法匹配）。
         if let context = buildContextMessage(for: config) {
-            history.append(context)
+            history.insert(context, at: 1)
         }
 
 
