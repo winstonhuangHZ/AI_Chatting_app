@@ -236,9 +236,10 @@ final class AppearanceStore: ObservableObject {
         isClaudeTheme ? .white : .primary
     }
 
-    /// AI 消息气泡背景（Claude 主题为纯白抬升面，否则跟随系统）。
+    /// AI 消息气泡背景（Claude 主题为透明——回答直接铺在米白背景上，
+    /// 与 Claude.ai 一致，避免白色卡片显得突兀；否则跟随系统）。
     var assistantBubbleColor: Color {
-        isClaudeTheme ? Self.claudeElevated : Color(nsColor: .controlBackgroundColor)
+        isClaudeTheme ? .clear : Color(nsColor: .controlBackgroundColor)
     }
 
     /// 侧栏背景（Claude 主题为米灰表面，否则跟随系统）。
