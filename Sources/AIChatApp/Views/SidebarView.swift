@@ -155,6 +155,10 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
+        // macOS renders the List selection highlight using the accent color:
+        // tinting the list makes it clay on the Claude theme instead of the
+        // system blue (the row also draws its own soft tint underneath).
+        .tint(appearance.accentColor)
     }
 }
 
