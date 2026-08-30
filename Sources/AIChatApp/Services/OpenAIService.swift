@@ -276,6 +276,11 @@ enum ChatStreamEvent: Sendable {
 }
 
 /// Accumulates fragmented streaming tool-call deltas for one index.
+private struct ToolRoundOutcome {
+    var toolCalls: [Int: ToolCallAccumulator] = [:]
+    var yieldedText = false
+}
+
 private struct ToolCallAccumulator {
     var id = ""
     var name = ""
@@ -696,99 +701,31 @@ actor OpenAIService {
                 do {
                     var history = await Self.payloadMessages(from: messages, model: model)
                     var round = 0
+                    var gotFinalAnswer = false
 
                     while round < maxRounds {
                         round += 1
-                        let payload = ChatPayload(
+                        let outcome = try await performToolRound(
+                            url: url,
                             model: model,
-                            messages: history,
-                            stream: true,
-                            tools: tools
+                            apiKey: config.apiKey,
+                            history: history,
+                            tools: tools,
+                            continuation: continuation
                         )
 
-                        var request = URLRequest(url: url)
-                        request.httpMethod = "POST"
-                        request.timeoutInterval = 300
-                        request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
-                        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                        do {
-                            request.httpBody = try JSONEncoder().encode(payload)
-                        } catch {
-                            throw OpenAIServiceError.transport(
-                                "Failed to encode request body: \(error.localizedDescription)"
-                            )
-                        }
-
-                        let (bytes, response) = try await session.bytes(for: request)
-                        guard let http = response as? HTTPURLResponse else {
-                            throw OpenAIServiceError.transport("Invalid HTTP response.")
-                        }
-                        guard (200..<300).contains(http.statusCode) else {
-                            var errorData = Data()
-                            for try await byte in bytes {
-                                errorData.append(byte)
-                                if errorData.count > 8192 { break }
-                            }
-                            throw OpenAIServiceError.httpError(
-                                statusCode: http.statusCode,
-                                message: Self.decodeErrorMessage(from: errorData)
-                            )
-                        }
-
-                        var toolCalls: [Int: ToolCallAccumulator] = [:]
-                        var yieldedText = false
-
-                        for try await line in bytes.lines {
-                            try Task.checkCancellation()
-                            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !trimmed.isEmpty, !trimmed.hasPrefix(":") else { continue }
-                            guard trimmed.hasPrefix("data:") else { continue }
-
-                            let payload = String(trimmed.dropFirst("data:".count))
-                                .trimmingCharacters(in: .whitespacesAndNewlines)
-                            if payload == "[DONE]" || payload.uppercased().contains("[DONE]") {
-                                break
-                            }
-                            guard let chunkData = payload.data(using: .utf8) else { continue }
-                            do {
-                                let chunk = try JSONDecoder().decode(StreamChunk.self, from: chunkData)
-                                if let delta = chunk.contentDelta, !delta.isEmpty {
-                                    yieldedText = true
-                                    continuation.yield(.text(delta))
-                                }
-                                if let deltas = chunk.toolCallDeltas {
-                                    for delta in deltas {
-                                        let index = delta.index ?? 0
-                                        var acc = toolCalls[index] ?? ToolCallAccumulator()
-                                        if let id = delta.id, !id.isEmpty { acc.id = id }
-                                        if let name = delta.function?.name, !name.isEmpty {
-                                            acc.name += name
-                                        }
-                                        if let arguments = delta.function?.arguments, !arguments.isEmpty {
-                                            acc.arguments += arguments
-                                        }
-                                        toolCalls[index] = acc
-                                    }
-                                }
-                            } catch {
-                                // Skip malformed chunks (keep-alive / metadata).
-                                continue
-                            }
-                        }
-
-                        // No tool calls → this round's text is the final answer.
-                        if toolCalls.isEmpty {
-                            if !yieldedText {
+                        // 本轮模型直接给出文本答案 → 完成。
+                        if outcome.toolCalls.isEmpty {
+                            if !outcome.yieldedText {
                                 throw OpenAIServiceError.emptyStream
                             }
+                            gotFinalAnswer = true
                             break
                         }
 
-                        // Execute tools, append assistant(tool_calls) + tool
-                        // result messages, then loop for another round.
-                        let sorted = toolCalls.sorted { $0.key < $1.key }
-
+                        // 执行工具（容错：失败也返回错误文本让模型调整），
+                        // 追加 assistant(tool_calls) + tool 结果后继续下一轮。
+                        let sorted = outcome.toolCalls.sorted { $0.key < $1.key }
                         let assistantMessage = PayloadToolCallMessage(
                             content: nil,
                             tool_calls: sorted.map { _, acc in
@@ -803,15 +740,37 @@ actor OpenAIService {
                         for (_, acc) in sorted {
                             let toolName = acc.name.isEmpty ? "unknown" : acc.name
                             continuation.yield(.toolActivity(toolName))
-                            let result = try await ChatTools.execute(
-                                name: acc.name,
-                                argumentsJSON: acc.arguments
-                            )
+                            let result: String
+                            do {
+                                result = try await ChatTools.execute(
+                                    name: acc.name,
+                                    argumentsJSON: acc.arguments
+                                )
+                            } catch {
+                                result = "Error executing tool \(toolName): \(error.localizedDescription)"
+                            }
                             continuation.yield(.toolFinished(toolName))
                             history.append(.toolResult(PayloadToolResultMessage(
                                 tool_call_id: acc.id.isEmpty ? "call_\(toolName)" : acc.id,
                                 content: result
                             )))
+                        }
+                    }
+
+                    // 循环耗尽仍无文本答案（模型每轮都只返回 tool_calls）：
+                    // 追加一轮**不带 tools** 的收尾请求，强制模型基于已执行
+                    // 的工具结果整理出最终答案，避免"工具用完就静默结束"。
+                    if !gotFinalAnswer {
+                        let outcome = try await performToolRound(
+                            url: url,
+                            model: model,
+                            apiKey: config.apiKey,
+                            history: history,
+                            tools: nil,
+                            continuation: continuation
+                        )
+                        if !outcome.yieldedText {
+                            throw OpenAIServiceError.emptyStream
                         }
                     }
 
@@ -839,6 +798,100 @@ actor OpenAIService {
             }
         }
     }
+
+    /// One round of the tool loop: streams a chat completion, yields text
+    /// deltas, and returns any tool-call fragments the model requested.
+    ///
+    /// `tools` is optional: pass `nil` for the final answer round after the
+    /// tool budget is exhausted — the model then has to respond in plain text.
+    private func performToolRound(
+        url: URL,
+        model: String,
+        apiKey: String,
+        history: [PayloadItem],
+        tools: [PayloadTool]?,
+        continuation: AsyncThrowingStream<ChatStreamEvent, Error>.Continuation
+    ) async throws -> ToolRoundOutcome {
+        let payload = ChatPayload(
+            model: model,
+            messages: history,
+            stream: true,
+            tools: tools
+        )
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 300
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        do {
+            request.httpBody = try JSONEncoder().encode(payload)
+        } catch {
+            throw OpenAIServiceError.transport(
+                "Failed to encode request body: \(error.localizedDescription)"
+            )
+        }
+
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw OpenAIServiceError.transport("Invalid HTTP response.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            var errorData = Data()
+            for try await byte in bytes {
+                errorData.append(byte)
+                if errorData.count > 8192 { break }
+            }
+            throw OpenAIServiceError.httpError(
+                statusCode: http.statusCode,
+                message: Self.decodeErrorMessage(from: errorData)
+            )
+        }
+
+        var outcome = ToolRoundOutcome()
+
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix(":") else { continue }
+            guard trimmed.hasPrefix("data:") else { continue }
+
+            let data = String(trimmed.dropFirst("data:".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if data == "[DONE]" || data.uppercased().contains("[DONE]") {
+                break
+            }
+            guard let chunkData = data.data(using: .utf8) else { continue }
+            do {
+                let chunk = try JSONDecoder().decode(StreamChunk.self, from: chunkData)
+                if let delta = chunk.contentDelta, !delta.isEmpty {
+                    outcome.yieldedText = true
+                    continuation.yield(.text(delta))
+                }
+                if let deltas = chunk.toolCallDeltas {
+                    for delta in deltas {
+                        let index = delta.index ?? 0
+                        var acc = outcome.toolCalls[index] ?? ToolCallAccumulator()
+                        if let id = delta.id, !id.isEmpty { acc.id = id }
+                        if let name = delta.function?.name, !name.isEmpty {
+                            acc.name += name
+                        }
+                        if let arguments = delta.function?.arguments, !arguments.isEmpty {
+                            acc.arguments += arguments
+                        }
+                        outcome.toolCalls[index] = acc
+                    }
+                }
+            } catch {
+                // Skip malformed chunks (keep-alive / metadata).
+                continue
+            }
+        }
+
+        return outcome
+    }
+
 
     // MARK: - Streaming chat completion
 
