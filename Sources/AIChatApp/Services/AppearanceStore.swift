@@ -162,6 +162,12 @@ final class AppearanceStore: ObservableObject {
     /// 主文本（暖黑）`#2D2D2B`.
     static let claudeText = Color(hex: 0x2D2D2B)
 
+    /// 代码块深炭底 `#262624`（Claude 风格，任何主题下都高对比）.
+    static let claudeCodeBlockBackground = Color(hex: 0x262624)
+
+    /// 代码块米白文字 `#ECECE9`.
+    static let claudeCodeBlockText = Color(hex: 0xECECE9)
+
     /// 次要文本 `#6B6B67`.
     static let claudeMutedText = Color(hex: 0x6B6B67)
 

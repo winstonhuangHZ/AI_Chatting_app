@@ -33,6 +33,20 @@ struct MarkdownText: View {
         fontSize ?? appearance.pointSize
     }
 
+    /// Inline-code background: clay tint on the Claude theme, neutral gray
+    /// otherwise — enough contrast on both light and dark system themes.
+    private var inlineCodeBackgroundColor: Color {
+        appearance.isClaudeTheme
+            ? AppearanceStore.claudeAccent.opacity(0.14)
+            : Color.secondary.opacity(0.14)
+    }
+
+    private var inlineCodeTextColor: Color {
+        appearance.isClaudeTheme
+            ? AppearanceStore.claudeAccentDeep
+            : .primary
+    }
+
     var body: some View {
         Markdown(
             // The block quote prefix instructs the parser to keep the raw
@@ -50,6 +64,31 @@ struct MarkdownText: View {
             FontSize(effectiveFontSize)
             // Apply the preset font family to the whole markdown body.
             FontFamily(appearance.fontPreset.fontPropertiesFamily)
+        }
+        // Inline code: subtle tinted background so it stands off the bubble.
+        .markdownTextStyle(\.code) {
+            FontFamilyVariant(.monospaced)
+            FontSize(.em(0.9))
+            ForegroundColor(inlineCodeTextColor)
+            BackgroundColor(inlineCodeBackgroundColor)
+        }
+        // Fenced code blocks: dark card (Claude-style) for strong contrast on
+        // both the cream Claude background and the system one.
+        .markdownBlockStyle(\.codeBlock) { configuration in
+            configuration.label
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(AppearanceStore.claudeCodeBlockBackground)
+                )
+                .markdownTextStyle {
+                    FontFamilyVariant(.monospaced)
+                    FontSize(.em(0.88))
+                    ForegroundColor(AppearanceStore.claudeCodeBlockText)
+                }
+                .markdownMargin(top: .em(0.6), bottom: .em(0.6))
         }
         .markdownBlockStyle(\.table) { configuration in
             configuration.label
