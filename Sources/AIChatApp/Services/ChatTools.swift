@@ -41,13 +41,28 @@ struct BuiltinTool {
 /// Registry + execution for the built-in tools offered to the model.
 enum ChatTools {
 
-    /// The full tool set sent on every tool-enabled request.
+    /// The full tool set sent on every agent-mode (tool-enabled) request.
+    static let all: [BuiltinTool] = [getTime, calc, webSearch, webFetch, weather]
+
+    // MARK: - get_time
+
+    /// Returns the current date & time (server-local).
     ///
-    /// Note: a `get_time` tool is deliberately NOT included — the app already
-    /// injects the current time as a `[yyyy-MM-dd HH:mm:ss]` prefix on the
-    /// newest user message when `includeTimestamp` is on, and the system
-    /// prompt tells the model to treat it as ground truth.
-    static let all: [BuiltinTool] = [calc, webSearch, webFetch, weather]
+    /// The app no longer stamps requests with a timestamp (that broke DeepSeek's
+    /// byte-identical prefix cache: ~5% hits). A `get_time` call happens inside
+    /// the request — its `tool` result message is NOT persisted to history — so
+    /// the next request's `messages` prefix stays byte-identical and the cache
+    /// keeps hitting (~67%+). Available in ALL modes when `includeTimestamp` is on.
+    static let getTime = BuiltinTool(
+        name: "get_time",
+        description: "Returns the current date and time in \"yyyy-MM-dd HH:mm:ss\" (server-local). Call it whenever the user asks what time or date it is, or needs a precise \"now\". Never guess the time.",
+        parameters: [:]
+    ) { _ in
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter.string(from: Date())
+    }
 
     /// Executes a tool by name. Unknown tools / failures return a plain-text
     /// error string the model can read and adjust to.

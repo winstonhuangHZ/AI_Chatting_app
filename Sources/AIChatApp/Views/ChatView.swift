@@ -58,7 +58,8 @@ struct ChatView: View {
                 dynamicPrices: configStore.activeConfig?.modelPrices ?? [:],
                 systemPrompt: configStore.activeConfig?.systemPrompt ?? "",
                 profileJSON: chatViewModel.userProfileStore.jsonPayload,
-                customPrice: configStore.activeConfig?.customPrice
+                customPrice: configStore.activeConfig?.customPrice,
+                cacheUsage: chatViewModel.lastCacheUsage
             )
 
             InputBarView(
@@ -391,6 +392,9 @@ private struct MessageBubble: View {
     /// `true` when this message is the sidebar-search highlight target.
     let isHighlighted: Bool
 
+    /// `true` while the generation-metadata popover is open.
+    @State private var showDetail = false
+
     // MARK: - Environment
 
     @EnvironmentObject private var appearance: AppearanceStore
@@ -408,8 +412,27 @@ private struct MessageBubble: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(roleLabel).font(.caption).foregroundStyle(.secondary)
-                    Text(message.timestamp, style: .time)
+                    // Per-message send/receive time: persisted with the message
+                    // (JSON `timestamp`) but never sent to the API, so prompt
+                    // caching is unaffected.
+                    Text(message.timestamp.formatted(date: .numeric, time: .shortened))
                         .font(.caption2).foregroundStyle(.tertiary)
+                        .help(message.timestamp.formatted(date: .complete, time: .standard))
+
+                    if message.role == .assistant {
+                        Button {
+                            showDetail.toggle()
+                        } label: {
+                            Image(systemName: "info.circle")
+                                .font(.system(size: 10))
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.tertiary)
+                        .help(L("detail.help"))
+                        .popover(isPresented: $showDetail) {
+                            MessageDetailView(message: message)
+                        }
+                    }
                 }
 
                 // Image attachments preview (user messages).
@@ -684,6 +707,109 @@ private struct MessageBubble: View {
     }
 }
 
+// MARK: - Message detail popover
+
+/// Generation metadata for an assistant reply: model, exact send/receive time,
+/// relay-reported token usage and the tool-call flow (Agent mode / get_time).
+///
+/// All data comes from fields persisted on the message itself — none of it is
+/// ever serialized into the API payload, so prompt caching is unaffected.
+private struct MessageDetailView: View {
+    let message: ChatMessage
+
+    @EnvironmentObject private var localization: LocalizationManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(L("detail.title"), systemImage: "info.circle")
+                .font(.headline)
+
+            detailRow(L("detail.role"), roleLabel)
+            detailRow(L("detail.time"),
+                      message.timestamp.formatted(date: .complete, time: .standard))
+
+            if let model = message.model, !model.isEmpty {
+                detailRow(L("detail.model"), model)
+            }
+
+            if let usage = message.usage {
+                Divider()
+                Label(L("detail.tokens"), systemImage: "number")
+                    .font(.subheadline.weight(.semibold))
+                if let p = usage.promptTokens {
+                    detailRow(L("detail.tokens.input"), TokenUsage.formatCount(p))
+                }
+                if let c = usage.completionTokens {
+                    detailRow(L("detail.tokens.output"), TokenUsage.formatCount(c))
+                }
+                if let hit = usage.cacheHitTokens, let miss = usage.cacheMissTokens {
+                    let total = hit + miss
+                    let ratio = total > 0 ? String(format: "%.0f%%", Double(hit) / Double(total) * 100) : "–"
+                    detailRow(L("detail.tokens.cache"),
+                              "\(TokenUsage.formatCount(hit)) / \(TokenUsage.formatCount(miss))  (\(ratio))")
+                }
+            }
+
+            if !message.toolFlow.isEmpty {
+                Divider()
+                Label(L("detail.tools"), systemImage: "wrench.and.screwdriver")
+                    .font(.subheadline.weight(.semibold))
+                ForEach(Array(message.toolFlow.enumerated()), id: \.offset) { index, record in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(index + 1). \(record.name)")
+                            .font(.caption.weight(.semibold))
+                        if !record.arguments.isEmpty {
+                            Text(record.arguments)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(3)
+                        }
+                        if !record.resultPreview.isEmpty {
+                            Text(record.resultPreview)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(3)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
+            if message.model == nil && message.usage == nil && message.toolFlow.isEmpty {
+                Text(L("detail.empty"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .frame(width: 340)
+    }
+
+    private var roleLabel: String {
+        switch message.role {
+        case .user: return L("you")
+        case .assistant: return L("assistant")
+        case .system: return L("system")
+        }
+    }
+
+    private func detailRow(_ key: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(key)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 88, alignment: .leading)
+            Text(value)
+                .font(.caption)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+// MARK: - Attachment thumbnail
+
+
 // MARK: - Attachment thumbnail
 
 private struct AttachmentThumbnail: View {
@@ -721,6 +847,9 @@ private struct UsageBarView: View {
     let systemPrompt: String
     let profileJSON: String?
     let customPrice: CustomPrice?
+
+    /// Relay-reported cache hit/miss for the last completed request.
+    let cacheUsage: StreamUsage?
 
     /// 界面本地化——语言切换时即时刷新。
     @EnvironmentObject private var localization: LocalizationManager
@@ -785,6 +914,15 @@ private struct UsageBarView: View {
             }
 
             Spacer()
+
+            // Relay-reported prefix-cache hit rate for the last request
+            // (DeepSeek `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`).
+            if let usage = cacheUsage, let ratio = usage.cacheHitRatio {
+                Text(L("usage.cache.hit", Int((ratio * 100).rounded())))
+                    .font(.caption)
+                    .foregroundStyle(ratio >= 0.5 ? Color.secondary : Color.orange)
+                    .help(L("usage.cache.detail", usage.cacheHitTokens ?? 0, usage.cacheMissTokens ?? 0))
+            }
 
             if !messages.isEmpty {
                 Text(L("msg.count", messages.count))

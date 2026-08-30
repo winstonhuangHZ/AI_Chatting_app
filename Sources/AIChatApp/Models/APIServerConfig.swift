@@ -152,7 +152,7 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         modelPrices: [String: ModelPrice] = [:],
         systemPrompt: String = APIServerConfig.defaultSystemPrompt,
         streamEnabled: Bool = true,
-        includeTimestamp: Bool = true,
+        includeTimestamp: Bool = false,
         toolsEnabled: Bool = false,
         customPrice: CustomPrice? = nil
     ) {
@@ -193,7 +193,9 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
             ?? APIServerConfig.defaultSystemPrompt
         streamEnabled = try container.decodeIfPresent(Bool.self, forKey: .streamEnabled) ?? true
-        includeTimestamp = try container.decodeIfPresent(Bool.self, forKey: .includeTimestamp) ?? true
+        // Cache-optimization: timestamps break DeepSeek's byte-identical prefix
+        // matching (hit rate collapses to ~5%), so they default OFF.
+        includeTimestamp = try container.decodeIfPresent(Bool.self, forKey: .includeTimestamp) ?? false
         toolsEnabled = try container.decodeIfPresent(Bool.self, forKey: .toolsEnabled) ?? false
         customPrice = try container.decodeIfPresent(CustomPrice.self, forKey: .customPrice)
     }

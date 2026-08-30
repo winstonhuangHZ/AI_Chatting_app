@@ -353,6 +353,7 @@ private struct ProfileEditView: View {
                     Toggle(L("streaming.on"), isOn: $draft.streamEnabled)
 
                     Toggle(L("timestamp.on"), isOn: $draft.includeTimestamp)
+                        .help(L("timestamp.warning"))
 
                     Toggle(L("agent.mode"), isOn: $draft.toolsEnabled)
                 } header: {

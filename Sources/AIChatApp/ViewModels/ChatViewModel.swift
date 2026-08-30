@@ -88,6 +88,10 @@ final class ChatViewModel: ObservableObject {
     /// Dismisses the error banner when set.
     @Published var errorDismissToken = 0
 
+    /// Token usage (incl. cache hit/miss) reported by the relay for the most
+    /// recent completed request. `nil` until a relay provides the data.
+    @Published var lastCacheUsage: StreamUsage?
+
     // MARK: - Full-text search
 
     /// Sidebar search query (empty = normal session list).
@@ -179,16 +183,14 @@ final class ChatViewModel: ObservableObject {
             """
         }
 
-        // 渐进增强：告知模型「最新 user 消息开头的时间戳」是系统注入的当前时间。
+        // 渐进增强：告知模型用 get_time 工具获取当前时间。
         let tsMarker = "TIMESTAMP NOTE"
         if !prompt.contains(tsMarker) {
             prompt += """
 
-            TIMESTAMP NOTE: The newest USER message may carry a leading timestamp \
-            in square brackets, e.g. "[2026-08-19 01:02:03] ...". It is injected \
-            by the app itself — treat it as the system-provided current time \
-            whenever the user asks about time/date. Never fabricate or guess a \
-            time; always use the provided timestamp as ground truth for "now".
+            TIMESTAMP NOTE: You have a get_time tool. Whenever the user asks about \
+            the current time, date, or "now", call get_time and use its returned \
+            value as ground truth. Never guess or fabricate a time.
             """
         }
         return prompt
@@ -196,11 +198,10 @@ final class ChatViewModel: ObservableObject {
 
     /// Builds the **dynamic** trailing context: learned user profile only.
     ///
-    /// The current time no longer lives here — it is injected into the newest
-    /// user message (see `timestamppedHistory`) so the request's long static
-    /// prefix stays byte-identical AND the model still sees an exact timestamp
-    /// close to the question. Dynamic profile JSON remains the LAST message so
-    /// prefix caching is unaffected by profile edits.
+    /// The current time is no longer injected as a message — the model gets it
+    /// via the `get_time` tool when needed (cache-safe: tool results never
+    /// persist). Dynamic profile JSON remains the LAST message so prefix
+    /// caching is unaffected by profile edits.
     ///
     /// Returns `nil` when there is no profile data to send.
     private func buildContextMessage(for config: APIServerConfig) -> ChatMessage? {
@@ -209,34 +210,6 @@ final class ChatViewModel: ObservableObject {
         KNOWLEDGE ABOUT THE USER (use it to personalize your reply):
         \(profileJSON)
         """)
-    }
-
-    /// Prepends a precise (second-granularity) timestamp to the newest user
-    /// message — only in the copy sent to the API, never persisted to storage.
-    ///
-    /// Cache-optimization: the timestamp sits at the very end of the growing
-    /// history (the latest user message), so every older token (static system
-    /// prompt + previous turns) stays byte-identical across minutes → DeepSeek
-    /// & friends keep hitting the prefix cache while still giving the model an
-    /// exact "now" near the question.
-    private func timestamppedHistory(
-        _ history: [ChatMessage],
-        config: APIServerConfig
-    ) -> [ChatMessage] {
-        guard config.includeTimestamp,
-              var last = history.last,
-              last.role == .user,
-              !last.content.isEmpty else { return history }
-
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        let stamp = formatter.string(from: Date())
-
-        last.content = "[\(stamp)] \(last.content)"
-        var result = history
-        result[result.count - 1] = last
-        return result
     }
 
     /// The active session object, if any.
@@ -338,13 +311,11 @@ final class ChatViewModel: ObservableObject {
         let systemPrompt = buildSystemPrompt(for: config)
         history.insert(.system(systemPrompt), at: 0)
 
-        // 精确时间戳注入最新 user（不污染存储），前缀保持字节稳定。
-        history = timestamppedHistory(history, config: config)
-
         // 动态偏好 JSON 保留在最后（动态 context 需在末尾以保前缀命中）。
         if let context = buildContextMessage(for: config) {
             history.append(context)
         }
+
 
         startGeneration(
             sessionID: sessionID,
@@ -414,13 +385,11 @@ final class ChatViewModel: ObservableObject {
         let systemPrompt = buildSystemPrompt(for: config)
         history.insert(.system(systemPrompt), at: 0)
 
-        // 精确时间戳注入最新 user（不污染存储），前缀保持字节稳定。
-        history = timestamppedHistory(history, config: config)
-
         // 动态偏好 JSON 保留在最后（动态 context 需在末尾以保前缀命中）。
         if let context = buildContextMessage(for: config) {
             history.append(context)
         }
+
 
         startGeneration(
             sessionID: sessionID,
@@ -448,7 +417,9 @@ final class ChatViewModel: ObservableObject {
         sessionStore.persistPaused = true
 
         // Append a placeholder assistant message that fills as deltas land.
-        let assistantMessage = ChatMessage.assistant()
+        // Record the model so the message-info popover can show it.
+        var assistantMessage = ChatMessage.assistant()
+        assistantMessage.model = model
         sessionStore.appendMessage(assistantMessage, to: sessionID)
         streamingAssistantID = assistantMessage.id
 
@@ -462,14 +433,20 @@ final class ChatViewModel: ObservableObject {
             guard let self else { return }
 
             do {
-                // AGENT MODE: built-in tool calling (web_search / calc / time).
-                // A per-profile toggle; normal chats keep the plain `tools`-free
-                // request so relays / cache behavior are completely unchanged.
-                if configForRequest.toolsEnabled {
+                // AGENT MODE / TIME: built-in tool calling. Agent mode sends the
+                // full tool set; non-agent chats send only `get_time` when the
+                // "timestamp" toggle is on (cache-safe: tool results are never
+                // persisted, so the request prefix stays byte-identical).
+                if configForRequest.toolsEnabled || configForRequest.includeTimestamp {
+                    let toolSet: [BuiltinTool]? = configForRequest.toolsEnabled ? nil : [ChatTools.getTime]
                     let stream = try await service.streamChatWithTools(
                         config: configForRequest,
                         model: modelForRequest,
-                        messages: history
+                        messages: history,
+                        tools: toolSet,
+                        usageHandler: { [weak self] usage in
+                            Task { @MainActor in self?.lastCacheUsage = usage }
+                        }
                     )
                     try await self.consumeToolEvents(
                         stream,
@@ -488,7 +465,10 @@ final class ChatViewModel: ObservableObject {
                     let stream = try await service.streamChat(
                         config: configForRequest,
                         model: modelForRequest,
-                        messages: history
+                        messages: history,
+                        usageHandler: { [weak self] usage in
+                            Task { @MainActor in self?.lastCacheUsage = usage }
+                        }
                     )
 
                     var accumulated = ""
@@ -518,6 +498,7 @@ final class ChatViewModel: ObservableObject {
                         self.applyProfileChanges(changes)
                     }
 
+                    self.persistLastUsage(to: sessionID)
                     self.sessionStore.forcePersist()
                     self.isStreaming = false
                     self.streamTask = nil
@@ -530,7 +511,10 @@ final class ChatViewModel: ObservableObject {
                 let stream = try await service.streamChat(
                     config: configForRequest,
                     model: modelForRequest,
-                    messages: history
+                    messages: history,
+                    usageHandler: { [weak self] usage in
+                        Task { @MainActor in self?.lastCacheUsage = usage }
+                    }
                 )
 
                 var accumulated = ""
@@ -574,6 +558,8 @@ final class ChatViewModel: ObservableObject {
                 if let changes = UserProfileStore.parse(from: accumulated) {
                     self.applyProfileChanges(changes)
                 }
+
+                self.persistLastUsage(to: sessionID)
 
                 // Stream finished normally.
                 self.sessionStore.forcePersist()
@@ -627,6 +613,7 @@ final class ChatViewModel: ObservableObject {
         var accumulated = ""
         var lastFlush = ContinuousClock.now
         var collectedSources: [ChatSource] = []
+        var toolFlow: [MessageToolCallRecord] = []
 
         for try await event in stream {
             // If the user switched sessions mid-stream, stop writing.
@@ -663,6 +650,10 @@ final class ChatViewModel: ObservableObject {
                 }
             case .sources(let list):
                 collectedSources.append(contentsOf: list)
+            case .usage(let usage):
+                lastCacheUsage = usage
+            case .toolRecord(let record):
+                toolFlow.append(record)
             }
         }
 
@@ -677,6 +668,12 @@ final class ChatViewModel: ObservableObject {
             sessionStore.updateLastAssistantSources(collectedSources, in: sessionID)
         }
 
+        // Persist generation metadata for the message-info popover.
+        if !toolFlow.isEmpty {
+            sessionStore.updateLastAssistantToolFlow(toolFlow, in: sessionID)
+        }
+        persistLastUsage(to: sessionID)
+
         // After the full reply arrives, parse & store any new personalization.
         if let changes = UserProfileStore.parse(from: accumulated) {
             applyProfileChanges(changes)
@@ -689,6 +686,18 @@ final class ChatViewModel: ObservableObject {
         hasReceivedFirstToken = false
     }
 
+
+    /// Copies the last relay-reported usage onto the just-finished assistant
+    /// message so the message-info popover can show real token numbers.
+    private func persistLastUsage(to sessionID: UUID) {
+        guard let usage = lastCacheUsage else { return }
+        sessionStore.updateLastAssistantUsage(MessageUsage(
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            cacheHitTokens: usage.cacheHitTokens,
+            cacheMissTokens: usage.cacheMissTokens
+        ), in: sessionID)
+    }
 
     private static func stripPersonalization(from text: String) -> String {
         var result = text

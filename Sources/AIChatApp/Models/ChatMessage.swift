@@ -110,6 +110,33 @@ struct ChatSource: Identifiable, Codable, Hashable {
     var id: String { url }
 }
 
+/// One tool call executed while producing an assistant reply.
+///
+/// Recorded for the message-info popover; persisted with the message but
+/// NEVER sent to the API (the `PayloadMessage` wire type only carries
+/// `role` + `content`, so prompt-cache prefixes are unaffected).
+struct MessageToolCallRecord: Codable, Hashable {
+    /// Tool name, e.g. `web_search`.
+    var name: String
+
+    /// The JSON arguments the model passed to the tool.
+    var arguments: String
+
+    /// A short preview of the tool's result (truncated for display).
+    var resultPreview: String
+}
+
+/// Token usage for a single assistant message as reported by the relay
+/// (DeepSeek extends the standard fields with cache hit/miss counters).
+///
+/// Persisted with the message for the info popover; never sent to the API.
+struct MessageUsage: Codable, Hashable {
+    var promptTokens: Int?
+    var completionTokens: Int?
+    var cacheHitTokens: Int?
+    var cacheMissTokens: Int?
+}
+
 /// A single message within a `ChatSession`.
 ///
 /// Content is the fully accumulated text. When streaming, the assistant
@@ -138,6 +165,16 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     /// Source references (web tools) rendered below assistant replies.
     var sources: [ChatSource]
 
+    /// Model that generated this assistant message (nil for user/system).
+    /// Persisted for the info popover; never sent to the API.
+    var model: String?
+
+    /// Relay-reported token usage for this assistant message.
+    var usage: MessageUsage?
+
+    /// Tool-call flow executed while generating this assistant reply.
+    var toolFlow: [MessageToolCallRecord]
+
     // MARK: - Initializers
 
     init(
@@ -147,7 +184,10 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         attachments: [ImageAttachment] = [],
         documentAttachments: [DocumentAttachment] = [],
         timestamp: Date = Date(),
-        sources: [ChatSource] = []
+        sources: [ChatSource] = [],
+        model: String? = nil,
+        usage: MessageUsage? = nil,
+        toolFlow: [MessageToolCallRecord] = []
     ) {
         self.id = id
         self.role = role
@@ -156,6 +196,9 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         self.documentAttachments = documentAttachments
         self.timestamp = timestamp
         self.sources = sources
+        self.model = model
+        self.usage = usage
+        self.toolFlow = toolFlow
     }
 
     /// Convenience factory for user messages (with optional image attachments).
@@ -193,7 +236,11 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         content = try container.decode(String.self, forKey: .content)
         attachments = try container.decodeIfPresent([ImageAttachment].self, forKey: .attachments) ?? []
         documentAttachments = try container.decodeIfPresent([DocumentAttachment].self, forKey: .documentAttachments) ?? []
-        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        // Fall back to "now" for very old archives persisted before timestamps.
+        timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date()
         sources = try container.decodeIfPresent([ChatSource].self, forKey: .sources) ?? []
+        model = try container.decodeIfPresent(String.self, forKey: .model)
+        usage = try container.decodeIfPresent(MessageUsage.self, forKey: .usage)
+        toolFlow = try container.decodeIfPresent([MessageToolCallRecord].self, forKey: .toolFlow) ?? []
     }
 }

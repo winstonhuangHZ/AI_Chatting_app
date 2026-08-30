@@ -132,6 +132,37 @@ final class SessionStore: ObservableObject {
         sessions[sessionIndex].messages[msgIndex].sources = sources
     }
 
+    /// Records the model that produced the last assistant message (info popover).
+    func updateLastAssistantModel(_ model: String, in sessionID: UUID) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let msgIndex = sessions[sessionIndex].messages.indices.last,
+              sessions[sessionIndex].messages[msgIndex].role == .assistant else {
+            return
+        }
+        sessions[sessionIndex].messages[msgIndex].model = model
+    }
+
+    /// Records the relay-reported token usage for the last assistant message.
+    func updateLastAssistantUsage(_ usage: MessageUsage, in sessionID: UUID) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let msgIndex = sessions[sessionIndex].messages.indices.last,
+              sessions[sessionIndex].messages[msgIndex].role == .assistant else {
+            return
+        }
+        sessions[sessionIndex].messages[msgIndex].usage = usage
+    }
+
+    /// Records the tool-call flow executed while producing the last assistant
+    /// message (Agent mode / get_time), for the message-info popover.
+    func updateLastAssistantToolFlow(_ flow: [MessageToolCallRecord], in sessionID: UUID) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let msgIndex = sessions[sessionIndex].messages.indices.last,
+              sessions[sessionIndex].messages[msgIndex].role == .assistant else {
+            return
+        }
+        sessions[sessionIndex].messages[msgIndex].toolFlow = flow
+    }
+
     /// Deletes a single message (by id) from the given session.
     func deleteMessage(_ message: ChatMessage, in sessionID: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }

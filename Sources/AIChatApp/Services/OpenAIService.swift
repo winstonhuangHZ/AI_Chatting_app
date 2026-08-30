@@ -263,6 +263,31 @@ private struct PayloadImageURL: Encodable {
 /// - `GET /v1/models` (returns model list **and** dynamic prices, if any)
 /// - `POST /v1/chat/completions` with **SSE streaming** exposed via
 ///   `AsyncThrowingStream<String, Error>`.
+/// Token usage reported by the relay on the final stream chunk (DeepSeek
+/// extends the standard `usage` with `prompt_cache_hit_tokens` /
+/// `prompt_cache_miss_tokens`). All fields are optional because different
+/// relays / models report different subsets.
+struct StreamUsage: Sendable, Equatable {
+    /// Total input tokens for this request (nil when the relay omits it).
+    var promptTokens: Int?
+
+    /// Total output tokens (nil when the relay omits it).
+    var completionTokens: Int?
+
+    /// Input tokens served from DeepSeek's disk prefix cache.
+    var cacheHitTokens: Int?
+
+    /// Input tokens that had to be processed (cache miss).
+    var cacheMissTokens: Int?
+
+    /// Cache hit ratio when the cache split is reported.
+    var cacheHitRatio: Double? {
+        guard let hit = cacheHitTokens, let miss = cacheMissTokens else { return nil }
+        let total = hit + miss
+        return total > 0 ? Double(hit) / Double(total) : nil
+    }
+}
+
 /// Events yielded by `streamChatWithTools` (function calling).
 enum ChatStreamEvent: Sendable {
     /// A text delta of the final answer.
@@ -276,6 +301,12 @@ enum ChatStreamEvent: Sendable {
 
     /// Source references collected from web tools (rendered below the answer).
     case sources([ChatSource])
+
+    /// Token usage from the relay's final chunk (cache hit/miss included).
+    case usage(StreamUsage)
+
+    /// A completed tool call, recorded for the message-info popover.
+    case toolRecord(MessageToolCallRecord)
 }
 
 /// Accumulates fragmented streaming tool-call deltas for one index.
@@ -332,6 +363,18 @@ actor OpenAIService {
         }
 
         let choices: [Choice]?
+
+        /// Token usage reported on the final chunk. DeepSeek extends the
+        /// standard fields with `prompt_cache_hit_tokens` and
+        /// `prompt_cache_miss_tokens`.
+        struct Usage: Decodable {
+            let prompt_tokens: Int?
+            let completion_tokens: Int?
+            let prompt_cache_hit_tokens: Int?
+            let prompt_cache_miss_tokens: Int?
+        }
+
+        let usage: Usage?
 
         /// Extracts the delta text for this chunk, if any.
         var contentDelta: String? {
@@ -679,7 +722,9 @@ actor OpenAIService {
     func streamChatWithTools(
         config: APIServerConfig,
         model: String,
-        messages: [ChatMessage]
+        messages: [ChatMessage],
+        tools toolsOverride: [BuiltinTool]? = nil,
+        usageHandler: ((StreamUsage) -> Void)? = nil
     ) async throws -> AsyncThrowingStream<ChatStreamEvent, Error> {
         let baseURL = try normalizedBaseURL(from: config.baseURL)
         guard !config.apiKey.isEmpty else {
@@ -690,7 +735,9 @@ actor OpenAIService {
         }
 
         let url = baseURL.appendingPathComponent("chat/completions")
-        let tools: [PayloadTool] = ChatTools.all.map { tool in
+        // nil = full built-in set (agent mode); non-nil = custom subset
+        // (e.g. just `get_time` for non-agent chats that still want the time).
+        let tools: [PayloadTool] = (toolsOverride ?? ChatTools.all).map { tool in
             PayloadTool(function: PayloadToolFunction(
                 name: tool.name,
                 description: tool.description,
@@ -715,7 +762,8 @@ actor OpenAIService {
                             apiKey: config.apiKey,
                             history: history,
                             tools: tools,
-                            continuation: continuation
+                            continuation: continuation,
+                            usageHandler: usageHandler
                         )
 
                         // 本轮模型直接给出文本答案 → 完成。
@@ -754,6 +802,11 @@ actor OpenAIService {
                                 result = "Error executing tool \(toolName): \(error.localizedDescription)"
                             }
                             continuation.yield(.toolFinished(toolName))
+                            continuation.yield(.toolRecord(MessageToolCallRecord(
+                                name: toolName,
+                                arguments: acc.arguments,
+                                resultPreview: String(result.prefix(140))
+                            )))
                             collectedSources.append(contentsOf: ChatTools.sources(for: acc.name, result: result))
                             history.append(.toolResult(PayloadToolResultMessage(
                                 tool_call_id: acc.id.isEmpty ? "call_\(toolName)" : acc.id,
@@ -772,7 +825,8 @@ actor OpenAIService {
                             apiKey: config.apiKey,
                             history: history,
                             tools: nil,
-                            continuation: continuation
+                            continuation: continuation,
+                            usageHandler: usageHandler
                         )
                         if !outcome.yieldedText {
                             throw OpenAIServiceError.emptyStream
@@ -820,7 +874,8 @@ actor OpenAIService {
         apiKey: String,
         history: [PayloadItem],
         tools: [PayloadTool]?,
-        continuation: AsyncThrowingStream<ChatStreamEvent, Error>.Continuation
+        continuation: AsyncThrowingStream<ChatStreamEvent, Error>.Continuation,
+        usageHandler: ((StreamUsage) -> Void)?
     ) async throws -> ToolRoundOutcome {
         let payload = ChatPayload(
             model: model,
@@ -875,6 +930,16 @@ actor OpenAIService {
             guard let chunkData = data.data(using: .utf8) else { continue }
             do {
                 let chunk = try JSONDecoder().decode(StreamChunk.self, from: chunkData)
+                if let u = chunk.usage,
+                   let hit = u.prompt_cache_hit_tokens,
+                   let miss = u.prompt_cache_miss_tokens {
+                    usageHandler?(StreamUsage(
+                        promptTokens: u.prompt_tokens,
+                        completionTokens: u.completion_tokens,
+                        cacheHitTokens: hit,
+                        cacheMissTokens: miss
+                    ))
+                }
                 if let delta = chunk.contentDelta, !delta.isEmpty {
                     outcome.yieldedText = true
                     continuation.yield(.text(delta))
@@ -919,7 +984,8 @@ actor OpenAIService {
     func streamChat(
         config: APIServerConfig,
         model: String,
-        messages: [ChatMessage]
+        messages: [ChatMessage],
+        usageHandler: ((StreamUsage) -> Void)? = nil
     ) async throws -> AsyncThrowingStream<String, Error> {
         let baseURL = try normalizedBaseURL(from: config.baseURL)
         guard !config.apiKey.isEmpty else {
@@ -998,6 +1064,16 @@ actor OpenAIService {
                         guard let chunkData = payload.data(using: .utf8) else { continue }
                         do {
                             let chunk = try JSONDecoder().decode(StreamChunk.self, from: chunkData)
+                            if let u = chunk.usage,
+                               let hit = u.prompt_cache_hit_tokens,
+                               let miss = u.prompt_cache_miss_tokens {
+                                usageHandler?(StreamUsage(
+                                    promptTokens: u.prompt_tokens,
+                                    completionTokens: u.completion_tokens,
+                                    cacheHitTokens: hit,
+                                    cacheMissTokens: miss
+                                ))
+                            }
                             if let delta = chunk.contentDelta, !delta.isEmpty {
                                 yieldedAnyContent = true
                                 continuation.yield(delta)
