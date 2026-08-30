@@ -29,7 +29,7 @@ enum ChatTools {
     /// injects the current time as a `[yyyy-MM-dd HH:mm:ss]` prefix on the
     /// newest user message when `includeTimestamp` is on, and the system
     /// prompt tells the model to treat it as ground truth.
-    static let all: [BuiltinTool] = [calc, webSearch]
+    static let all: [BuiltinTool] = [calc, webSearch, webFetch, weather]
 
     /// Executes a tool by name. Unknown tools / failures return a plain-text
     /// error string the model can read and adjust to.
@@ -43,6 +43,49 @@ enum ChatTools {
             arguments = object
         }
         return try await tool.execute(arguments)
+    }
+
+    // MARK: - web_fetch
+
+    private static let webFetch = BuiltinTool(
+        name: "web_fetch",
+        description: "Fetch and read the full text content of a web page by URL. Use it to read the full article behind a search result or to check a specific page. Returns the page title and extracted plain text (max 8000 chars).",
+        parameters: [
+            "type": "object",
+            "properties": [
+                "url": ["type": "string", "description": "The full http(s) URL to fetch and read"],
+            ],
+            "required": ["url"],
+        ]
+    ) { arguments in
+        guard let url = arguments["url"] as? String,
+              !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "Error: missing \"url\" argument."
+        }
+        return try await WebPageReader.read(url)
+    }
+
+    // MARK: - weather
+
+    private static let weather = BuiltinTool(
+        name: "weather",
+        description: "Get the current weather and a 3-day forecast for a location (city name like \"Beijing\" or coordinates like \"39.9,116.4\"). Returns temperature, feels-like, humidity, wind, precipitation probability, and condition. ONLY use when the user explicitly asks about the weather or temperature — never fetch it proactively.",
+        parameters: [
+            "type": "object",
+            "properties": [
+                "location": [
+                    "type": "string",
+                    "description": "City name (e.g. \"Beijing\", \"Tokyo\") or \"latitude,longitude\" (e.g. \"39.9,116.4\")",
+                ],
+            ],
+            "required": ["location"],
+        ]
+    ) { arguments in
+        guard let location = arguments["location"] as? String,
+              !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "Error: missing \"location\" argument."
+        }
+        return try await Weather.now(location: location)
     }
 
     // MARK: - calc
@@ -96,8 +139,6 @@ enum ChatTools {
         return try await WebSearch.search(query)
     }
 }
-
-
 // MARK: - Web search backend (zero-key DuckDuckGo)
 
 /// Minimal web search without any API key.
@@ -241,3 +282,221 @@ enum WebSearch {
         return result
     }
 }
+
+// MARK: - Web page reader (zero-key fetch + text extraction)
+
+/// Fetches a web page and returns its plain-text content.
+enum WebPageReader {
+    static let maxContentChars = 8000
+
+    static func read(_ rawURL: String) async throws -> String {
+        let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host != nil else {
+            return "Error: invalid URL \"\(trimmed)\". Only http(s) URLs are supported."
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.setValue(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            forHTTPHeaderField: "User-Agent"
+        )
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            return "Fetch failed: invalid HTTP response."
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            return "Fetch failed: HTTP \(http.statusCode)."
+        }
+        guard let html = String(data: data, encoding: .utf8)
+                ?? String(data: data, encoding: .isoLatin1) else {
+            return "Fetch failed: could not decode the page."
+        }
+
+        let text = extractText(from: html)
+        guard !text.isEmpty else {
+            return "Fetch succeeded but the page contains no readable text."
+        }
+        let truncated = text.count > maxContentChars
+            ? String(text.prefix(maxContentChars)) + "\n…[truncated]"
+            : text
+        return "Page: \(url.absoluteString)\n\n\(truncated)"
+    }
+
+    /// Strips script/style, removes tags, decodes entities, collapses whitespace.
+    private static func extractText(from html: String) -> String {
+        var text = html
+        text = text.replacingOccurrences(
+            of: "(?is)<script[^>]*>.*?</script>|(?is)<style[^>]*>.*?</style>|(?is)<!--.*?-->",
+            with: " ",
+            options: .regularExpression
+        )
+        // Turn block-level tags into newlines for readability.
+        text = text.replacingOccurrences(
+            of: "(?i)<(p|div|h[1-6]|li|br|tr|section|article|blockquote)[^>]*>",
+            with: "\n",
+            options: .regularExpression
+        )
+        // Strip any remaining tags.
+        text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        text = decodeEntities(text)
+        text = text.replacingOccurrences(of: "&nbsp;", with: " ")
+        let lines = text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func decodeEntities(_ text: String) -> String {
+        var result = text
+        let pairs = [
+            ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""),
+            ("&#x27;", "'"), ("&#39;", "'"), ("&nbsp;", " "),
+            ("&#8217;", "'"), ("&#8216;", "'"), ("&#8220;", "\""), ("&#8221;", "\""),
+            ("&#8211;", "–"), ("&#8212;", "—"), ("&#8230;", "…"),
+        ]
+        for (from, to) in pairs { result = result.replacingOccurrences(of: from, with: to) }
+        return result
+    }
+}
+
+
+// MARK: - Weather backend (zero-key Open-Meteo)
+
+/// Current weather + 3-day forecast via Open-Meteo (no API key).
+enum Weather {
+    struct Place {
+        let name: String
+        let latitude: Double
+        let longitude: Double
+    }
+
+    static func now(location: String) async throws -> String {
+        let trimmed = location.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Error: missing \"location\" argument." }
+
+        // Resolve coordinates: "lat,lon" directly, otherwise geocode the name.
+        let lat: Double
+        let lon: Double
+        let displayName: String
+        if let comma = trimmed.firstIndex(of: ","),
+           let l1 = Double(trimmed[..<comma].trimmingCharacters(in: .whitespaces)),
+           let l2 = Double(trimmed[trimmed.index(after: comma)...].trimmingCharacters(in: .whitespaces)),
+           (-90...90).contains(l1), (-180...180).contains(l2) {
+            lat = l1
+            lon = l2
+            displayName = "\(l1),\(l2)"
+        } else if let place = try await geocode(trimmed) {
+            lat = place.latitude
+            lon = place.longitude
+            displayName = place.name
+        } else {
+            return "Error: could not find location \"\(trimmed)\". Try a city name like \"Beijing\" or coordinates like \"39.9,116.4\"."
+        }
+
+        guard var components = URLComponents(string: "https://api.open-meteo.com/v1/forecast") else {
+            return "Error: weather service unavailable."
+        }
+        components.queryItems = [
+            URLQueryItem(name: "latitude", value: String(lat)),
+            URLQueryItem(name: "longitude", value: String(lon)),
+            URLQueryItem(name: "current", value: "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m"),
+            URLQueryItem(name: "daily", value: "temperature_2m_max,temperature_2m_min,precipitation_probability_max"),
+            URLQueryItem(name: "timezone", value: "auto"),
+            URLQueryItem(name: "forecast_days", value: "3"),
+        ]
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 15
+        request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return "Error: weather service unavailable."
+        }
+        guard let current = object["current"] as? [String: Any],
+              let temp = current["temperature_2m"] as? Double,
+              let code = current["weather_code"] as? Int else {
+            return "Error: weather service returned no data."
+        }
+
+        let feelsLike = current["apparent_temperature"] as? Double
+        let humidity = current["relative_humidity_2m"] as? Double
+        let wind = current["wind_speed_10m"] as? Double
+        let condition = Self.condition(for: code)
+
+        var lines: [String] = ["Current weather in \(displayName):"]
+        lines.append("  \(condition), \(Self.fmt(temp))°C" + (feelsLike.map { ", 体感 \(Self.fmt($0))°C" } ?? ""))
+        lines.append("  湿度 \(humidity.map { "\(Int($0))%" } ?? "—"), 风速 \(wind.map { "\(Self.fmt($0)) km/h" } ?? "—")")
+
+        if let daily = object["daily"] as? [String: Any],
+           let dates = daily["time"] as? [String],
+           let maxes = daily["temperature_2m_max"] as? [Double],
+           let mins = daily["temperature_2m_min"] as? [Double] {
+            let probs = daily["precipitation_probability_max"] as? [Double] ?? []
+            lines.append("3-day forecast:")
+            for (i, date) in dates.enumerated() where i < maxes.count && i < mins.count {
+                let day = date.suffix(5)
+                let rain = i < probs.count ? "\(Int(probs[i]))%" : "—"
+                lines.append("  \(day): \(Self.fmt(mins[i]))°C ~ \(Self.fmt(maxes[i]))°C, 降水概率 \(rain)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+
+    private static func geocode(_ name: String) async throws -> Place? {
+        guard var components = URLComponents(string: "https://geocoding-api.open-meteo.com/v1/search") else {
+            return nil
+        }
+        components.queryItems = [
+            URLQueryItem(name: "name", value: name),
+            URLQueryItem(name: "count", value: "1"),
+            URLQueryItem(name: "language", value: "zh"),
+        ]
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 10
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = object["results"] as? [[String: Any]],
+              let first = results.first,
+              let latitude = first["latitude"] as? Double,
+              let longitude = first["longitude"] as? Double else {
+            return nil
+        }
+        let city = first["name"] as? String ?? name
+        let country = first["country"] as? String ?? ""
+        return Place(name: country.isEmpty ? city : "\(city), \(country)", latitude: latitude, longitude: longitude)
+    }
+
+    private static func fmt(_ value: Double) -> String {
+        value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
+    }
+
+    private static func condition(for code: Int) -> String {
+        switch code {
+        case 0: return "晴"
+        case 1: return "基本晴朗"
+        case 2: return "局部多云"
+        case 3: return "阴天"
+        case 45, 48: return "有雾"
+        case 51, 53, 55: return "毛毛雨"
+        case 56, 57: return "冻毛毛雨"
+        case 61, 63, 65: return "下雨"
+        case 66, 67: return "冻雨"
+        case 71, 73, 75: return "下雪"
+        case 77: return "雪粒"
+        case 80, 81, 82: return "阵雨"
+        case 85, 86: return "阵雪"
+        case 95: return "雷暴"
+        case 96, 99: return "雷暴伴冰雹"
+        default: return "天气码 \(code)"
+        }
+    }
+}
+

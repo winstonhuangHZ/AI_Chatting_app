@@ -22,7 +22,7 @@
 - [x] 创建进度跟踪文件 `track_progress.md`
 - [x] **设计决策**：工具调用做成**独立模式**，默认关闭 → 普通聊天完全不受影响（请求不带 `tools` 字段，prompt cache 字节稳定）
 - [x] **`Services/ChatTools.swift`**（新建）：工具定义 + 执行器 + WebSearch 后端
-  - [x] 工具注册表 `ChatTools.all`（calc / web_search；get_time 因系统已内置时间戳注入而省略）
+  - [x] 工具注册表 `ChatTools.all`（calc / web_search / web_fetch / weather；get_time 因系统已内置时间戳注入而省略）
   - [x] `execute(name:argumentsJSON:)`
   - [x] `WebSearch`（DDG Instant Answer + HTML 降级）
 - [x] **`OpenAIService.swift`**：
@@ -32,12 +32,12 @@
   - [x] `ChatPayload` 增加可选 `tools`（仅非 nil 时编码，保持缓存字节稳定）
   - [x] `payloadMessages` 返回 `[PayloadItem]`
   - [x] 新增 `ChatStreamEvent`（`.text` / `.toolActivity` / `.toolFinished`）
-  - [ ] 新增 `streamChatWithTools`（内部 tool 循环，max 3 轮）
+  - [x] 新增 `streamChatWithTools`（内部 tool 循环，max 3 轮 + 收尾答案轮）
 - [x] **`APIServerConfig.swift`**：增加 `toolsEnabled: Bool = false`（默认关闭，Codable 兼容）
 - [x] **`ChatViewModel.swift`**：startGeneration 按 `toolsEnabled` 路由 + consumeToolEvents 事件循环，发送时按模式路由（关闭→原 `streamChat`，开启→`streamChatWithTools`）
 - [x] **`ChatView.swift` TopBarView**：Agent 模式切换（持久化到 profile）
 - [x] **`AppLanguage.swift`**：新增 `agent.mode` 等本地化文案
-- [ ] 构建验证
+- [x] 构建验证
 
 ### 设计要点
 - 工具循环在服务层内部，`ChatMessage` 模型不改（历史里不持久化 tool_calls，重试会重新触发工具）
@@ -76,7 +76,7 @@
 - [x] `swift build --skip-update` 全量通过
 - [x] `./build.sh --package` 打包 + 启动冒烟测试
 - [x] 逻辑验证：calc 计算、恶意表达式拦截、DDG 在线搜索、tokenizer 数值抽查、价格优先级（custom > relay > 内置表 + 缓存档成本）
-- [ ] git 提交（feat/agentic-features）
+- [x] git 提交（feat/agentic-features）
 
 ---
 
@@ -104,4 +104,14 @@
 - [x] **`AppearancePickerView.swift`**：设置页「主题」选择器（跟随系统 / Claude 米白橙）
 - [x] **`AppLanguage.swift`**：`appearance.theme` / `theme.system` / `theme.claude` 六语言文案
 - [x] 构建 + 打包 + 启动冒烟通过
+
+
+---
+
+## 附加：工具集扩充与收尾轮修复
+
+- [x] **`OpenAIService.swift`**：工具循环重构——单轮逻辑抽 `performToolRound`；循环耗尽仍无文本答案时追加一轮**不带 tools** 的收尾请求强制给出最终答案；工具执行失败容错（错误文本回传模型而非中断整个流）
+- [x] **`ChatTools.swift`**：新增 `web_fetch`（抓网页全文，纯文本 ≤8000 字符，复用 DDG 去标签逻辑）与 `weather`（Open-Meteo 零 key：城市名 geocoding 解析 + 当前天气 + 3 天预报，中文 WMO 描述；description 明确约束"仅用户明确询问天气时使用，禁止主动查询"）
+- [x] `web_fetch` 解析 WebPageReader（script/style 剔除 → 块级标签转行 → 去标签 → 实体解码 → 空白折叠）
+- [x] 构建 + 打包 + 启动冒烟通过；geocoding / forecast API 返回结构与解析逻辑逐字段核对
 
