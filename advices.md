@@ -10,7 +10,7 @@
 
 ### 1. 工具调用 / Function Calling（+ 内置工具集）
 - **借鉴**：[`modelcontextprotocol/swift-sdk`](https://github.com/modelcontextprotocol/swift-sdk)（未来做 MCP 标准协议时）
-- **当前实现**：`OpenAIService` 扩展 `tools` + `tool_calls` 字段，内置 4 个工具（`calc` / `web_search` / `web_fetch` / `weather`；`get_time` 因系统已内置时间戳注入而省略），服务层内部维护 tool-call 循环（最多 3 轮 + 收尾答案轮），流式体验不变
+- **当前实现**：`OpenAIService` 扩展 `tools` + `tool_calls` 字段，内置 4 个工具（`calc` / `web_search` / `web_fetch` / `weather`；`get_time` 因系统已内置时间戳注入而省略），服务层内部维护 tool-call 循环（最多 5 轮 + 收尾答案轮），流式体验不变
 - **注意**：部分中继/模型（如 DeepSeek-reasoner）不支持 tools → 开关放到 profile 设置里
 - **下一步**：把 `web_search` 等升级为 MCP server，对接文件系统、终端等
 

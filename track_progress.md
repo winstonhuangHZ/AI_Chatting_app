@@ -15,7 +15,7 @@
 ## 功能 1 & 2：工具调用（Function Calling）+ 联网搜索
 
 ### 目标
-扩展 `OpenAIService` 支持 OpenAI 标准 `tools` / `tool_calls` 字段，内置 3 个工具（`get_time` / `calc` / `web_search`），服务层内部维护 tool-call 循环（最多 3 轮），保持流式体验不变；联网搜索 = `web_search` 工具（DuckDuckGo，零 key）。
+扩展 `OpenAIService` 支持 OpenAI 标准 `tools` / `tool_calls` 字段，内置 4 个工具（`get_time` / `calc` / `web_search` 起步，后增 `web_fetch` / `weather`；`get_time` 已移除），服务层内部维护 tool-call 循环（最多 5 轮 + 收尾答案轮），保持流式体验不变；联网搜索 = `web_search` 工具（DuckDuckGo，零 key）。
 
 ### 子任务
 - [x] 创建 `advices.md`（整合建议文档）
@@ -32,7 +32,7 @@
   - [x] `ChatPayload` 增加可选 `tools`（仅非 nil 时编码，保持缓存字节稳定）
   - [x] `payloadMessages` 返回 `[PayloadItem]`
   - [x] 新增 `ChatStreamEvent`（`.text` / `.toolActivity` / `.toolFinished`）
-  - [x] 新增 `streamChatWithTools`（内部 tool 循环，max 3 轮 + 收尾答案轮）
+  - [x] 新增 `streamChatWithTools`（内部 tool 循环，max 5 轮 + 收尾答案轮）
 - [x] **`APIServerConfig.swift`**：增加 `toolsEnabled: Bool = false`（默认关闭，Codable 兼容）
 - [x] **`ChatViewModel.swift`**：startGeneration 按 `toolsEnabled` 路由 + consumeToolEvents 事件循环，发送时按模式路由（关闭→原 `streamChat`，开启→`streamChatWithTools`）
 - [x] **`ChatView.swift` TopBarView**：Agent 模式切换（持久化到 profile）

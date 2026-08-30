@@ -694,7 +694,7 @@ actor OpenAIService {
                 parameters: tool.parameters
             ))
         }
-        let maxRounds = 3
+        let maxRounds = 5
 
         return AsyncThrowingStream { continuation in
             let task = Task {
