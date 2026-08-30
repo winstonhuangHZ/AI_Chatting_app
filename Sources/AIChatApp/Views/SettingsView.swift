@@ -79,6 +79,7 @@ private struct ProfileListView: View {
                     Spacer()
                     Button(action: onAdd) { Label(L("add.profile"), systemImage: "plus") }
                         .buttonStyle(.borderedProminent)
+                        .tint(appearanceStore.accentColor)
                 }
                 .padding(16)
 
@@ -92,6 +93,7 @@ private struct ProfileListView: View {
                     } actions: {
                         Button(L("add.profile"), action: onAdd)
                             .buttonStyle(.borderedProminent)
+                            .tint(appearanceStore.accentColor)
                     }
                     .frame(height: 220)
                 } else {
@@ -262,6 +264,7 @@ private struct ProfileRow: View {
 private struct ProfileEditView: View {
     @EnvironmentObject private var configStore: ConfigStore
     @EnvironmentObject private var appSettingViewModel: AppSettingViewModel
+    @EnvironmentObject private var appearanceStore: AppearanceStore
 
     /// 界面本地化——语言切换时即时刷新。
     @EnvironmentObject private var localization: LocalizationManager
@@ -431,6 +434,7 @@ private struct ProfileEditView: View {
                     Text(isNew ? L("add") : L("save"))
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(appearanceStore.accentColor)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!isValid)
             }

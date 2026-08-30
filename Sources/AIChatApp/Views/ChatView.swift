@@ -255,6 +255,7 @@ private struct TopBarView: View {
                         .font(appearance.fontPreset.font(size: appearance.pointSize))
                 }
                 .buttonStyle(.bordered)
+                .tint(appearance.accentColor)
                 .help(L("new.chat.help"))
             }
 
@@ -471,7 +472,7 @@ private struct MessageBubble: View {
         .fixedSize(horizontal: false, vertical: true)
         // Search-result highlight (from the sidebar full-text search).
         .padding(3)
-        .background(isHighlighted ? Color.accentColor.opacity(0.18) : Color.clear)
+        .background(isHighlighted ? appearance.accentColor.opacity(0.18) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .animation(.easeInOut(duration: 0.25), value: isHighlighted)
         // Right-click actions: copy / delete.
@@ -618,7 +619,7 @@ private struct MessageBubble: View {
     private var avatar: some View {
         Image(systemName: message.role == .user ? "person.crop.circle.fill" : "sparkles")
             .font(.title3)
-            .foregroundStyle(message.role == .user ? Color.accentColor : .purple)
+            .foregroundStyle(message.role == .user ? appearance.accentColor : .purple)
             .frame(width: 28, height: 28)
     }
 }
@@ -817,7 +818,7 @@ private struct InputBarView: View {
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 24))
-                        .foregroundStyle(isSendDisabled ? Color.gray : Color.accentColor)
+                        .foregroundStyle(isSendDisabled ? Color.gray : appearance.accentColor)
                 }
                 .buttonStyle(.borderless)
                 .disabled(isSendDisabled)

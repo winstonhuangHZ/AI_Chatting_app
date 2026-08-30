@@ -36,6 +36,7 @@ struct SidebarView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(appearance.accentColor)
                 .controlSize(.large)
                 .disabled(isSearching)
             }
@@ -181,7 +182,7 @@ private struct SidebarRow: View {
                 .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                .foregroundStyle(isSelected ? appearance.accentColor : Color.primary)
 
             HStack(spacing: 4) {
                 Text(session.createdAt, style: .relative)

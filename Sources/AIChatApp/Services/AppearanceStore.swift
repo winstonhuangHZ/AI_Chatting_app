@@ -247,6 +247,14 @@ final class AppearanceStore: ObservableObject {
         isClaudeTheme ? Self.claudeSurface : Color(nsColor: .windowBackgroundColor)
     }
 
+    /// 主题强调色（Claude 主题为粘土橙 `#CC7D5E`，否则为系统 accentColor）。
+    ///
+    /// 用于 New Chat / 发送 / 设置保存等主按钮与高亮元素，让 Claude 主题
+    /// 的界面色系整体统一（不再残留系统蓝）。
+    var accentColor: Color {
+        isClaudeTheme ? Self.claudeAccent : Color.accentColor
+    }
+
     /// 当前字号（points）。
     var pointSize: CGFloat {
         fontSizeLevel.pointSize
