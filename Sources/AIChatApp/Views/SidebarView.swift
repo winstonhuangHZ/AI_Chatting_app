@@ -123,42 +123,29 @@ struct SidebarView: View {
         }
     }
 
-    /// Normal session list (with selection + context menu + swipe delete).
+    /// Normal session list. Uses scroll + manual selection highlight instead of
+    /// `List(selection:)`: macOS 14+ renders the List selection highlight as a
+    /// fixed system-blue overlay on interaction that cannot be themed, so the
+    /// row draws its own selection tint (clay on Claude, system accent otherwise).
     private var sessionList: some View {
-        // Custom selection binding: writing back goes through
-        // `chatViewModel.selectSession(id:)`, which ALSO updates
-        // `sessionStore.activeSessionID` so the message-history builder in
-        // `sendMessage` reads the correct session after app relaunch.
-        List(selection: Binding(
-            get: { chatViewModel.activeSessionID },
-            set: { chatViewModel.selectSession(id: $0) }
-        )) {
-            ForEach(chatViewModel.sessions) { session in
-                SidebarRow(
-                    session: session,
-                    isSelected: chatViewModel.activeSessionID == session.id
-                )
-                .tag(session.id)
-                .contextMenu {
-                    Button(L("delete.chat"), role: .destructive) {
-                        chatViewModel.deleteSession(session)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 2) {
+                ForEach(chatViewModel.sessions) { session in
+                    SidebarRow(
+                        session: session,
+                        isSelected: chatViewModel.activeSessionID == session.id,
+                        onSelect: { chatViewModel.selectSession(id: session.id) }
+                    )
+                    .contextMenu {
+                        Button(L("delete.chat"), role: .destructive) {
+                            chatViewModel.deleteSession(session)
+                        }
                     }
                 }
             }
-            .onDelete { indexSet in
-                for index in indexSet {
-                    if chatViewModel.sessions.indices.contains(index) {
-                        chatViewModel.deleteSession(chatViewModel.sessions[index])
-                    }
-                }
-            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
         }
-        .listStyle(.sidebar)
-        .scrollContentBackground(.hidden)
-        // macOS renders the List selection highlight using the accent color:
-        // tinting the list makes it clay on the Claude theme instead of the
-        // system blue (the row also draws its own soft tint underneath).
-        .tint(appearance.accentColor)
     }
 }
 
@@ -173,6 +160,12 @@ private struct SidebarRow: View {
     /// Whether this row is currently selected.
     let isSelected: Bool
 
+    /// Selects this session.
+    let onSelect: () -> Void
+
+    /// Hover state for a subtle non-selected rollover background.
+    @State private var isHovering = false
+
     // MARK: - Environment
 
     @EnvironmentObject private var appearance: AppearanceStore
@@ -181,35 +174,52 @@ private struct SidebarRow: View {
     // MARK: - Body
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(session.title)
-                .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .foregroundStyle(isSelected ? appearance.accentColor : Color.primary)
+        Button(action: onSelect) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(session.title)
+                    .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundStyle(isSelected ? appearance.accentColor : Color.primary)
 
-            HStack(spacing: 4) {
-                Text(session.createdAt, style: .relative)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                if !session.messages.isEmpty {
-                    Text("•")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                    Text(L("msgs.count", session.messages.count))
+                HStack(spacing: 4) {
+                    Text(session.createdAt, style: .relative)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                    if !session.messages.isEmpty {
+                        Text("•")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        Text(L("msgs.count", session.messages.count))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(rowBackgroundColor)
+            )
         }
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
-        // Self-drawn selection highlight: covers the macOS system-blue List
-        // selection so the tint follows the active theme (clay on Claude).
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? appearance.sidebarSelectionColor : Color.clear)
-        )
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .animation(.easeInOut(duration: 0.12), value: isSelected)
+        .animation(.easeInOut(duration: 0.12), value: isHovering)
+    }
+
+    /// Row fill: theme selection tint when selected, soft gray rollover
+    /// otherwise. Fully self-drawn — no system List highlight involved.
+    private var rowBackgroundColor: Color {
+        if isSelected {
+            return appearance.sidebarSelectionColor
+        }
+        return isHovering ? Color.primary.opacity(0.06) : Color.clear
     }
 }
 
