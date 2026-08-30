@@ -17,6 +17,111 @@ struct SidebarView: View {
     // MARK: - Body
 
     var body: some View {
+        Group {
+            if isSearching {
+                searchResultsList
+            } else {
+                sessionList
+            }
+        }
+        .safeAreaInset(edge: .top) {
+            VStack(spacing: 6) {
+                searchField
+                Button(action: {
+                    chatViewModel.createNewChat()
+                }) {
+                    Label(L("new.chat"), systemImage: "square.and.pencil")
+                        .font(appearance.fontPreset.font(size: appearance.pointSize))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(isSearching)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        }
+        .safeAreaInset(edge: .bottom) {
+            if !chatViewModel.sessions.isEmpty && !isSearching {
+                HStack {
+                    Text(L("chat.count", chatViewModel.sessions.count))
+                        .appearanceFont(appearance.fontPreset, size: appearance.pointSize - 1)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(role: .destructive) {
+                        for session in chatViewModel.sessions {
+                            chatViewModel.deleteSession(session)
+                        }
+                    } label: {
+                        Image(systemName: "trash")
+                            .help(L("delete.all.chats"))
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            }
+        }
+    }
+
+    // MARK: - Search
+
+    /// `true` when the user is actively searching (query non-empty).
+    private var isSearching: Bool {
+        !chatViewModel.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Search field: magnifier + query + clear button.
+    private var searchField: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            TextField(L("search.placeholder"), text: $chatViewModel.searchQuery)
+                .textFieldStyle(.plain)
+                .font(appearance.fontPreset.font(size: appearance.pointSize - 1))
+            if !chatViewModel.searchQuery.isEmpty {
+                Button {
+                    chatViewModel.clearSearch()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(L("search.clear"))
+            }
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background(Color.gray.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    /// Full-text search result list (replaces the session list while searching).
+    private var searchResultsList: some View {
+        let results = chatViewModel.searchResults
+        return Group {
+            if results.isEmpty {
+                ContentUnavailableView(
+                    L("search.no.results"),
+                    systemImage: "magnifyingglass",
+                    description: Text(L("search.no.results.description"))
+                )
+            } else {
+                List(results) { result in
+                    SearchResultRow(result: result) {
+                        chatViewModel.selectSearchResult(result)
+                    }
+                    .tag(result.id)
+                }
+                .listStyle(.sidebar)
+            }
+        }
+    }
+
+    /// Normal session list (with selection + context menu + swipe delete).
+    private var sessionList: some View {
         // Custom selection binding: writing back goes through
         // `chatViewModel.selectSession(id:)`, which ALSO updates
         // `sessionStore.activeSessionID` so the message-history builder in
@@ -46,40 +151,6 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .top) {
-            Button(action: {
-                chatViewModel.createNewChat()
-            }) {
-                Label(L("new.chat"), systemImage: "square.and.pencil")
-                    .font(appearance.fontPreset.font(size: appearance.pointSize))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-        }
-        .safeAreaInset(edge: .bottom) {
-            if !chatViewModel.sessions.isEmpty {
-                HStack {
-                    Text(L("chat.count", chatViewModel.sessions.count))
-                        .appearanceFont(appearance.fontPreset, size: appearance.pointSize - 1)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button(role: .destructive) {
-                        for session in chatViewModel.sessions {
-                            chatViewModel.deleteSession(session)
-                        }
-                    } label: {
-                        Image(systemName: "trash")
-                            .help(L("delete.all.chats"))
-                    }
-                    .buttonStyle(.borderless)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-            }
-        }
     }
 }
 
@@ -125,5 +196,39 @@ private struct SidebarRow: View {
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Search result row
+
+/// One full-text search hit: session title + snippet + role badge.
+private struct SearchResultRow: View {
+
+    let result: MessageSearchResult
+    let onSelect: () -> Void
+
+    @EnvironmentObject private var appearance: AppearanceStore
+
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(result.sessionTitle)
+                    .appearanceFont(appearance.fontPreset, size: appearance.pointSize - 2)
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+
+                Text(result.snippet)
+                    .appearanceFont(appearance.fontPreset, size: appearance.pointSize - 1)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+
+                Text(result.message.role == .user ? L("you") : L("assistant"))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

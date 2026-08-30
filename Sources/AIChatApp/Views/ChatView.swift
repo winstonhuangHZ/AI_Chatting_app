@@ -34,6 +34,7 @@ struct ChatView: View {
                     session: session,
                     streamingMessageID: chatViewModel.streamingAssistantID,
                     hasReceivedFirstToken: chatViewModel.hasReceivedFirstToken,
+                    highlightMessageID: chatViewModel.highlightMessageID,
                     lastMessageID: $lastMessageID
                 )
             } else {
@@ -53,16 +54,18 @@ struct ChatView: View {
                 model: configStore.activeConfig?.selectedModel ?? "",
                 dynamicPrices: configStore.activeConfig?.modelPrices ?? [:],
                 systemPrompt: configStore.activeConfig?.systemPrompt ?? "",
-                profileJSON: chatViewModel.userProfileStore.jsonPayload
+                profileJSON: chatViewModel.userProfileStore.jsonPayload,
+                customPrice: configStore.activeConfig?.customPrice
             )
 
             InputBarView(
-                onSend: { text, attachments in
+                onSend: { text, attachments, documents in
                     chatViewModel.sendMessage(
                         text,
                         config: configStore.activeConfig,
                         model: configStore.activeConfig?.selectedModel ?? "",
-                        attachments: attachments
+                        attachments: attachments,
+                        documents: documents
                     )
                 },
                 isStreaming: chatViewModel.isStreaming
@@ -219,6 +222,17 @@ private struct TopBarView: View {
 
             Spacer()
 
+            // Agent mode toggle (built-in tool calling: web search / calc /
+            // time). Off by default so normal chats keep the plain `tools`-free
+            // request body (prompt-cache friendly, relay-safe).
+            if configStore.activeConfig != nil {
+                Toggle(L("agent.mode"), isOn: agentModeBinding)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .font(appearance.fontPreset.font(size: appearance.pointSize - 1))
+                    .help(L("agent.mode.help"))
+            }
+
             // Generation controls
             if chatViewModel.isStreaming {
                 ProgressView().controlSize(.small)
@@ -266,6 +280,18 @@ private struct TopBarView: View {
             }
         )
     }
+
+    /// Agent mode toggle reads/writes the active profile's `toolsEnabled`.
+    private var agentModeBinding: Binding<Bool> {
+        Binding(
+            get: { configStore.activeConfig?.toolsEnabled ?? false },
+            set: { newValue in
+                guard let id = configStore.activeConfigID,
+                      let index = configStore.configs.firstIndex(where: { $0.id == id }) else { return }
+                configStore.configs[index].toolsEnabled = newValue
+            }
+        )
+    }
 }
 
 // MARK: - Message list
@@ -282,6 +308,9 @@ private struct MessageList: View {
     /// `true` once streaming has yielded content (drives two-stage indicator).
     let hasReceivedFirstToken: Bool
 
+    /// Message id to scroll to + highlight (jump from the sidebar search).
+    let highlightMessageID: UUID?
+
     /// Binding updated to the newest message id (drives autoscroll).
     @Binding var lastMessageID: UUID?
 
@@ -295,7 +324,8 @@ private struct MessageList: View {
                         MessageBubble(
                             message: message,
                             isStreaming: message.id == streamingMessageID,
-                            hasReceivedFirstToken: hasReceivedFirstToken
+                            hasReceivedFirstToken: hasReceivedFirstToken,
+                            isHighlighted: message.id == highlightMessageID
                         )
                         .id(message.id)
                     }
@@ -306,6 +336,13 @@ private struct MessageList: View {
                 if let newID {
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo(newID, anchor: .bottom)
+                    }
+                }
+            }
+            .onChange(of: highlightMessageID) { _, newID in
+                if let newID {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        proxy.scrollTo(newID, anchor: .center)
                     }
                 }
             }
@@ -338,6 +375,9 @@ private struct MessageBubble: View {
     /// `true` once streaming has yielded the first content token.
     let hasReceivedFirstToken: Bool
 
+    /// `true` when this message is the sidebar-search highlight target.
+    let isHighlighted: Bool
+
     // MARK: - Environment
 
     @EnvironmentObject private var appearance: AppearanceStore
@@ -362,6 +402,11 @@ private struct MessageBubble: View {
                 // Image attachments preview (user messages).
                 if !message.attachments.isEmpty {
                     attachmentGrid
+                }
+
+                // Document (PDF) attachments preview (user messages).
+                if !message.documentAttachments.isEmpty {
+                    documentGrid
                 }
 
                 if !contentDisplay.isEmpty {
@@ -420,6 +465,11 @@ private struct MessageBubble: View {
         // KEY FIX: prevent the whole bubble from being squeezed into a
         // zero-height row by LazyVStack while its Markdown re-lays out.
         .fixedSize(horizontal: false, vertical: true)
+        // Search-result highlight (from the sidebar full-text search).
+        .padding(3)
+        .background(isHighlighted ? Color.accentColor.opacity(0.18) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .animation(.easeInOut(duration: 0.25), value: isHighlighted)
         // Right-click actions: copy / delete.
         .contextMenu {
             Button {
@@ -501,6 +551,37 @@ private struct MessageBubble: View {
         .padding(.vertical, 2)
     }
 
+    /// Document (PDF) attachments: file icon + name + page count.
+    private var documentGrid: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(message.documentAttachments) { document in
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.richtext")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(document.filename)
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if document.pageCount > 0 {
+                            Text(L("pdf.pages", document.pageCount))
+                                .font(.system(size: 9))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+    }
+
     // MARK: - Derived
 
     private var roleLabel: String {
@@ -574,6 +655,7 @@ private struct UsageBarView: View {
     let dynamicPrices: [String: ModelPrice]
     let systemPrompt: String
     let profileJSON: String?
+    let customPrice: CustomPrice?
 
     /// 界面本地化——语言切换时即时刷新。
     @EnvironmentObject private var localization: LocalizationManager
@@ -582,17 +664,27 @@ private struct UsageBarView: View {
         TokenUsage.summarize(messages, systemPrompt: systemPrompt, profileJSON: profileJSON)
     }
 
-    private var estimatedCost: Double? {
+    private var costEstimate: TokenUsage.CostEstimate? {
         TokenUsage.estimatedCost(
             model: model,
             inputTokens: summary.input,
             outputTokens: summary.output,
-            dynamicPrices: dynamicPrices
+            dynamicPrices: dynamicPrices,
+            customPrice: customPrice
         )
     }
 
     private var priceUnknown: Bool {
-        !model.isEmpty && TokenUsage.prices(for: model, dynamicPrices: dynamicPrices) == nil
+        !model.isEmpty
+            && TokenUsage.pricing(
+                for: model,
+                dynamicPrices: dynamicPrices,
+                customPrice: customPrice
+            ) == nil
+    }
+
+    private var usingCustomPrice: Bool {
+        customPrice?.isValid == true
     }
 
     private var usingDynamicPrice: Bool {
@@ -607,13 +699,20 @@ private struct UsageBarView: View {
                    TokenUsage.formatCount(summary.output)))
                 .font(.caption).foregroundStyle(.secondary)
 
-            if let cost = estimatedCost {
-                Text("≈ \(TokenUsage.formatCost(cost))")
+            if let estimate = costEstimate {
+                Text("≈ \(TokenUsage.formatCost(estimate.full))")
                     .font(.caption).foregroundStyle(.secondary)
+                if let cached = estimate.cached, cached < estimate.full {
+                    Text(L("usage.cost.cached", TokenUsage.formatCost(cached)))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
 
             if priceUnknown {
                 Text(L("price.unknown"))
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if usingCustomPrice {
+                Text(L("custom.price.badge"))
                     .font(.caption).foregroundStyle(.secondary)
             } else if usingDynamicPrice {
                 Text(L("relay.price"))
@@ -641,7 +740,7 @@ private struct UsageBarView: View {
 /// - Thumbnail previews can be removed before sending.
 private struct InputBarView: View {
 
-    let onSend: (String, [ImageAttachment]) -> Void
+    let onSend: (String, [ImageAttachment], [DocumentAttachment]) -> Void
     let isStreaming: Bool
 
     @EnvironmentObject private var appearance: AppearanceStore
@@ -651,16 +750,22 @@ private struct InputBarView: View {
 
     @State private var draft = ""
     @State private var pendingAttachments: [ImageAttachment] = []
+    @State private var pendingDocuments: [DocumentAttachment] = []
     @FocusState private var isFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Attachment preview row.
-            if !pendingAttachments.isEmpty {
+            // Attachment preview row (images + PDFs).
+            if !pendingAttachments.isEmpty || !pendingDocuments.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(pendingAttachments) { attachment in
                         PendingAttachmentChip(attachment: attachment) {
                             removeAttachment(attachment)
+                        }
+                    }
+                    ForEach(pendingDocuments) { document in
+                        PendingDocumentChip(document: document) {
+                            removeDocument(document)
                         }
                     }
                     Spacer()
@@ -677,6 +782,15 @@ private struct InputBarView: View {
                 }
                 .buttonStyle(.borderless)
                 .help(L("attach.image"))
+
+                Button {
+                    pickPDFs()
+                } label: {
+                    Image(systemName: "doc.badge.plus")
+                        .font(.system(size: 14))
+                }
+                .buttonStyle(.borderless)
+                .help(L("attach.pdf"))
 
                 TextEditor(text: $draft)
                     .font(appearance.fontPreset.font(size: appearance.pointSize))
@@ -713,22 +827,28 @@ private struct InputBarView: View {
 
     private var isSendDisabled: Bool {
         let textEmpty = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return isStreaming || (textEmpty && pendingAttachments.isEmpty)
+        return isStreaming || (textEmpty && pendingAttachments.isEmpty && pendingDocuments.isEmpty)
     }
 
     private func onSubmit() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text.isEmpty == false || !pendingAttachments.isEmpty else { return }
+        guard text.isEmpty == false || !pendingAttachments.isEmpty || !pendingDocuments.isEmpty else { return }
         guard !isStreaming else { return }
 
         let attachments = pendingAttachments
+        let documents = pendingDocuments
         draft = ""
         pendingAttachments = []
-        onSend(text, attachments)
+        pendingDocuments = []
+        onSend(text, attachments, documents)
     }
 
     private func removeAttachment(_ attachment: ImageAttachment) {
         pendingAttachments.removeAll { $0.id == attachment.id }
+    }
+
+    private func removeDocument(_ document: DocumentAttachment) {
+        pendingDocuments.removeAll { $0.id == document.id }
     }
 
     private func pickImages() {
@@ -770,6 +890,35 @@ private struct InputBarView: View {
         default:     return "image/png"
         }
     }
+
+    private func pickPDFs() {
+        let panel = NSOpenPanel()
+        panel.title = L("attach.pdf")
+        panel.prompt = L("attach.pdf")
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [UTType(filenameExtension: "pdf")]
+            .compactMap { $0 }
+
+        guard panel.runModal() == .OK else { return }
+
+        for url in panel.urls {
+            guard let data = try? Data(contentsOf: url) else { continue }
+            // PDFs get a larger cap than images (documents are heavier).
+            if data.count > 30 * 1024 * 1024 { continue } // cap 30MB
+            let pages = PDFProcessor.pageCount(from: data)
+            guard pages > 0 else { continue } // invalid / non-PDF
+            pendingDocuments.append(
+                DocumentAttachment(
+                    filename: url.lastPathComponent,
+                    mimeType: "application/pdf",
+                    base64Data: data.base64EncodedString(),
+                    pageCount: pages
+                )
+            )
+        }
+    }
 }
 
 // MARK: - Pending attachment chip
@@ -800,6 +949,44 @@ private struct PendingAttachmentChip: View {
             .buttonStyle(.borderless)
         }
         .padding(3)
+        .background(Color.gray.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+// MARK: - Pending document chip
+
+private struct PendingDocumentChip: View {
+    let document: DocumentAttachment
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "doc.richtext.fill")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(document.filename)
+                    .font(.system(size: 10))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if document.pageCount > 0 {
+                    Text(L("pdf.pages", document.pageCount))
+                        .font(.system(size: 8))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: 120)
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(4)
         .background(Color.gray.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }

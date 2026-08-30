@@ -283,6 +283,60 @@ private struct ProfileEditView: View {
         self.onCancel = onCancel
     }
 
+    // MARK: - Custom price bindings
+
+    /// Enables/disables the user-defined price (creates the struct on demand).
+    private var customPriceEnabled: Binding<Bool> {
+        Binding(
+            get: { draft.customPrice != nil },
+            set: { enabled in
+                if enabled {
+                    if draft.customPrice == nil {
+                        draft.customPrice = CustomPrice(input: 0, output: 0, cachedInput: nil)
+                    }
+                } else {
+                    draft.customPrice = nil
+                }
+            }
+        )
+    }
+
+    private var customPriceInput: Binding<Double> {
+        Binding(
+            get: { draft.customPrice?.input ?? 0 },
+            set: { value in
+                if draft.customPrice == nil {
+                    draft.customPrice = CustomPrice(input: 0, output: 0, cachedInput: nil)
+                }
+                draft.customPrice?.input = value
+            }
+        )
+    }
+
+    private var customPriceOutput: Binding<Double> {
+        Binding(
+            get: { draft.customPrice?.output ?? 0 },
+            set: { value in
+                if draft.customPrice == nil {
+                    draft.customPrice = CustomPrice(input: 0, output: 0, cachedInput: nil)
+                }
+                draft.customPrice?.output = value
+            }
+        )
+    }
+
+    private var customPriceCached: Binding<Double> {
+        Binding(
+            get: { draft.customPrice?.cachedInput ?? 0 },
+            set: { value in
+                if draft.customPrice == nil {
+                    draft.customPrice = CustomPrice(input: 0, output: 0, cachedInput: nil)
+                }
+                draft.customPrice?.cachedInput = value > 0 ? value : nil
+            }
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(isNew ? L("add.profile.title") : L("edit.profile.title")).font(.title2.bold())
@@ -296,10 +350,26 @@ private struct ProfileEditView: View {
                     Toggle(L("streaming.on"), isOn: $draft.streamEnabled)
 
                     Toggle(L("timestamp.on"), isOn: $draft.includeTimestamp)
+
+                    Toggle(L("agent.mode"), isOn: $draft.toolsEnabled)
                 } header: {
                     Text(L("generation"))
                 } footer: {
                     Text(L("generation.footer"))
+                }
+
+                Section {
+                    Toggle(L("custom.price.enable"), isOn: customPriceEnabled)
+                    if customPriceEnabled.wrappedValue {
+                        TextField(L("custom.price.input"), value: customPriceInput, format: .number)
+                        TextField(L("custom.price.output"), value: customPriceOutput, format: .number)
+                        TextField(L("custom.price.cached"), value: customPriceCached, format: .number)
+                            .help(L("custom.price.cached.help"))
+                    }
+                } header: {
+                    Text(L("custom.price"))
+                } footer: {
+                    Text(L("custom.price.footer"))
                 }
 
                 Section {

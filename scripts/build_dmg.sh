@@ -82,6 +82,23 @@ file "$BIN" | head -1
 cp "$BIN" "$STAGE/Contents/MacOS/$APP_NAME"
 cp "$BUILD_ROOT/Info.plist" "$STAGE/Contents/Info.plist"
 
+# Copy SwiftPM resource bundles (SwiftMath's math fonts) next to the binary so
+# the packaged app can rasterize LaTeX. Bundle.module looks them up in
+# Contents/Resources at runtime. Covers universal, per-arch, and lipo-merged
+# layouts — always pick a bundle that exists next to the final binary.
+BIN_DIR="$(dirname "$BIN")"
+if ! ls "$BIN_DIR"/*.bundle >/dev/null 2>&1; then
+  # Per-arch products: the bundles live in each architecture's release dir.
+  BIN_DIR="$(find .build -path "*release" -type d 2>/dev/null | head -1)"
+fi
+for bundle in "$BIN_DIR"/*.bundle; do
+  if [ -e "$bundle" ]; then
+    info "Bundling resource: $(basename "$bundle")"
+    cp -R "$bundle" "$STAGE/Contents/Resources/"
+  fi
+done
+
+
 # Icon (generate if missing, then copy into Resources).
 if [ ! -f "$BUILD_ROOT/Assets/AppIcon.icns" ]; then
   info "Generating app icon…"

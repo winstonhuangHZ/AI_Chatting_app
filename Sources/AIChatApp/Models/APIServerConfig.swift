@@ -19,6 +19,30 @@ struct ModelPrice: Codable, Hashable {
     }
 }
 
+/// User-defined manual prices (USD per 1M tokens) for a profile.
+///
+/// Takes priority over relay-provided dynamic prices and the built-in price
+/// table, so users can fill in prices for relays that do not expose
+/// `pricing` on `GET /v1/models`.
+struct CustomPrice: Codable, Hashable {
+
+    /// USD per 1M input (prompt) tokens.
+    var input: Double
+
+    /// USD per 1M output (completion) tokens.
+    var output: Double
+
+    /// USD per 1M **cached** input tokens (optional; e.g. OpenRouter
+    /// `prompt_cache_read`). When set, the cost estimate shows a second,
+    /// cheaper figure assuming the whole input prefix hits the cache.
+    var cachedInput: Double?
+
+    /// Whether the required prices are non-negative (sane).
+    var isValid: Bool {
+        input >= 0 && output >= 0
+    }
+}
+
 /// Represents a single OpenAI-compatible API relay server profile.
 ///
 /// Stored in `UserDefaults` as JSON, so it conforms to `Codable` and
@@ -62,6 +86,19 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     /// Whether the current date/time is attached to the system prompt so the
     /// model is aware of "now" (time of day / day of week / date).
     var includeTimestamp: Bool
+
+    /// Whether replies stream token-by-token (true) or return as a single
+    /// response (false). Toggleable per profile.
+    ///
+    /// Agent mode (built-in tool calling: web_search / calc / get_time) only
+    /// applies when `toolsEnabled` is on. It is **off by default** so normal
+    /// chats keep a byte-identical, `tools`-free request body (prompt-cache
+    /// friendly) and never break relays that do not support tool calling.
+    var toolsEnabled: Bool
+
+    /// User-defined manual prices (input / output / cached-input). Takes
+    /// priority over relay dynamic prices and the built-in price table.
+    var customPrice: CustomPrice?
 
     /// Multi-line text editor in settings; the default value helps the model
     /// produce nicely formatted Markdown the app will render.
@@ -115,7 +152,9 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         modelPrices: [String: ModelPrice] = [:],
         systemPrompt: String = APIServerConfig.defaultSystemPrompt,
         streamEnabled: Bool = true,
-        includeTimestamp: Bool = true
+        includeTimestamp: Bool = true,
+        toolsEnabled: Bool = false,
+        customPrice: CustomPrice? = nil
     ) {
         self.id = id
         self.name = name
@@ -127,6 +166,8 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         self.systemPrompt = systemPrompt
         self.streamEnabled = streamEnabled
         self.includeTimestamp = includeTimestamp
+        self.toolsEnabled = toolsEnabled
+        self.customPrice = customPrice
     }
 
     /// A friendly display name for UI lists.
@@ -153,5 +194,7 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
             ?? APIServerConfig.defaultSystemPrompt
         streamEnabled = try container.decodeIfPresent(Bool.self, forKey: .streamEnabled) ?? true
         includeTimestamp = try container.decodeIfPresent(Bool.self, forKey: .includeTimestamp) ?? true
+        toolsEnabled = try container.decodeIfPresent(Bool.self, forKey: .toolsEnabled) ?? false
+        customPrice = try container.decodeIfPresent(CustomPrice.self, forKey: .customPrice)
     }
 }

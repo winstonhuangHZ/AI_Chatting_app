@@ -1,0 +1,66 @@
+# AIChatApp 开源项目整合建议
+
+> 基于当前架构（SwiftUI macOS + SwiftPM + MarkdownUI + SwiftMath、OpenAI 兼容 SSE 流式、UserDefaults/JSON 持久化、动态定价、多模态图片/PDF）整理。
+>
+> 建议按「投入产出比」分层。第一梯队已在本仓库 `feat/agentic-features` 分支实现。
+
+---
+
+## 🥇 第一梯队：功能空白（已实现）
+
+### 1. 工具调用 / Function Calling（+ 内置工具集）
+- **借鉴**：[`modelcontextprotocol/swift-sdk`](https://github.com/modelcontextprotocol/swift-sdk)（未来做 MCP 标准协议时）
+- **当前实现**：`OpenAIService` 扩展 `tools` + `tool_calls` 字段，内置 2 个工具（`calc` / `web_search`；`get_time` 因系统已内置时间戳注入而省略），服务层内部维护 tool-call 循环（最多 3 轮），流式体验不变
+- **注意**：部分中继/模型（如 DeepSeek-reasoner）不支持 tools → 开关放到 profile 设置里
+- **下一步**：把 `web_search` 等升级为 MCP server，对接文件系统、终端等
+
+### 2. 联网搜索
+- **借鉴**：[DuckDuckGo Instant Answer API](https://duckduckgo.com/api)（零 key）、[searxng](https://github.com/searxng/searxng)（自部署聚合）
+- **当前实现**：内置 `web_search` 工具，走 DDG Instant Answer + HTML 抓取降级
+- **下一步**：渲染"引用来源"标记（Perplexity 式）；接入自建 searxng
+
+### 3. 准确的 Token 计数
+- **借鉴**：OpenAI [tiktoken](https://github.com/openai/tiktoken)（官方近似算法）；真实 BPE 可用 [`intervinn/SwiftTokenizers`](https://github.com/intervinn/SwiftTokenizers)
+- **当前实现**：`AccurateTokenCounter`——cl100k_base 官方近似（英/数/空白分桶）+ CJK 微调，替换原字符启发式，误差通常 <5%
+- **下一步**：内嵌 `.tiktoken` vocab 文件换真实 BPE（注意 SPM bundle 复制，先例是 SwiftMath）
+
+### 4. 历史全文搜索
+- **借鉴**：[`SQLite.swift`](https://github.com/stephencelis/SQLite.swift) / [`GRDB.swift`](https://github.com/groue/GRDB.swift)（FTS5）；或 macOS SearchKit（零依赖）
+- **当前实现**：内存全文检索（标题 + 消息内容，大小写不敏感，命中跳转 + 高亮），会话量在桌面应用规模足够
+- **下一步**：换 SQLite/FTS5 支撑万级消息
+
+---
+
+## 🥈 第二梯队：体验增强（性价比高）
+
+| 功能 | 借鉴项目 | 说明 |
+|---|---|---|
+| 代码块语法高亮 | [`raspu/Highlightr`](https://github.com/raspu/Highlightr) | MarkdownUI 代码块默认无高亮，给 code block 包一层即可，纯 Swift 无 WebView |
+| Mermaid 流程图 | 复用 `MathSegmenter` 的 provider 管线思路 | ` ```mermaid ` 块走 WKWebView 快照，架构与数学渲染同构 |
+| 朗读回复（TTS） | 零依赖：系统 `AVSpeechSynthesizer` | 助手消息加 🔈 按钮，中文用 `zh-CN` voice |
+| 语音输入（STT） | [`WhisperKit`](https://github.com/argmaxinc/WhisperKit) | Apple Silicon 原生优化；可先用系统听写 API 过渡 |
+| API Key 安全 | [`kishikawakatsumi/KeychainAccess`](https://github.com/kishikawakatsumi/KeychainAccess) | 检查 `ConfigStore` 明文存储，Keychain 是安全底线 |
+
+---
+
+## 🥉 第三梯队：架构级（长期价值）
+
+1. **SQLite/GRDB 替代 JSON 持久化**：会话多了 JSON 全量读写会卡（流式期间禁持久化即是缓解）；GRDB 增量写 + FTS 一步到位
+2. **本地知识库 / RAG**：扩展 `UserProfileStore` 成可检索记忆库；macOS 15.5+ 自带 `Embedding`/`SemanticSearch`（零依赖）或 [`huggingface/swift-transformers`](https://github.com/huggingface/swift-transformers)
+3. **本地模型兜底**：Ollama 提供 OpenAI 兼容端点 `http://localhost:11434/v1` → 设置页加"本地模型"预设，几乎零代码
+4. **本地绘图**：Apple [`ml-stable-diffusion`](https://github.com/apple/ml-stable-diffusion)（Core ML），依赖重，非核心诉求不建议先做
+
+---
+
+## 💡 值得"借鉴设计"而非"整合代码"的项目
+
+- **Cherry Studio / Chatbox / Lobe Chat**：多模型桌面客户端成熟形态——MCP 面板、知识库、翻译、提示词超市的 UI 设计直接参考
+- **OpenRouter 缓存机制**：请求已 byte-stable（prompt cache 友好），可在 UI 上把"缓存命中"作为卖点展示
+
+---
+
+## 📌 建议优先级（如果只做三件）
+
+1. **Keychain 存密钥**（半天，安全底线）
+2. **代码高亮 + 语音朗读**（各半天，观感提升最直接）
+3. **工具调用（内置 3-4 个工具起步）**（1-2 天，功能质变）
