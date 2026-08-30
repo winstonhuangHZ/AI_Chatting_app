@@ -128,3 +128,11 @@
 - [x] **`AppLanguage.swift`**：`sources.title` 六语言（Sources / 来源 / Sources / Fuentes / Источники / المصادر）
 - [x] 解析逻辑独立脚本验证：中文标题、括号 URL（维基消歧义）、尾部噪声剥除、无效 URL 拒绝，全部通过；构建 + 打包 + 启动冒烟通过
 
+---
+
+## 附加：代码块语法高亮（零依赖）
+
+- [x] **`Views/CodeSyntaxHighlighter.swift`**（新建）：`ThemeCodeSyntaxHighlighter` 实现 MarkdownUI `CodeSyntaxHighlighter` 协议——正则 tokenizer 分类 注释/字符串/数字/关键字，配色对齐 Claude 调色板（米白正文、clay 关键字、柔绿字符串、灰注释、浅金数字）；支持 swift/python/js-ts/java/c-cpp/go/rust/bash/sql/kotlin/ruby/php/json/yaml/html/css 关键字表；`#` 注释仅对 python/bash/sql 等开启（避免 C 的 `#include` 误判）
+- [x] **`Views/MarkdownText.swift`**：`.markdownCodeSyntaxHighlighter(ThemeCodeSyntaxHighlighter())` 注册；代码块卡片升级为 语言标签栏 + 复制按钮 + 横向滚动（`CodeBlockConfiguration.content` 取源码）
+- [x] tokenizer 逻辑独立脚本验证 12 项断言（字符串/转义/注释/块注释/数字/`#include` 排除）全部通过；构建 + 打包 + 启动冒烟通过
+

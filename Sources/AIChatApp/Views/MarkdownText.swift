@@ -60,6 +60,7 @@ struct MarkdownText: View {
         // these providers turn them back into rendered LaTeX.
         .markdownImageProvider(MathBlockImageProvider(fontSize: effectiveFontSize))
         .markdownInlineImageProvider(MathInlineImageProvider(fontSize: effectiveFontSize))
+        .markdownCodeSyntaxHighlighter(ThemeCodeSyntaxHighlighter())
         .markdownTextStyle {
             FontSize(effectiveFontSize)
             // Apply the preset font family to the whole markdown body.
@@ -72,23 +73,45 @@ struct MarkdownText: View {
             ForegroundColor(inlineCodeTextColor)
             BackgroundColor(inlineCodeBackgroundColor)
         }
-        // Fenced code blocks: dark card (Claude-style) for strong contrast on
-        // both the cream Claude background and the system one.
+        // Fenced code blocks: dark card (Claude-style) with a language bar and
+        // copy button; content is syntax-highlighted via ThemeCodeSyntaxHighlighter.
         .markdownBlockStyle(\.codeBlock) { configuration in
-            configuration.label
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(AppearanceStore.claudeCodeBlockBackground)
-                )
-                .markdownTextStyle {
-                    FontFamilyVariant(.monospaced)
-                    FontSize(.em(0.88))
-                    ForegroundColor(AppearanceStore.claudeCodeBlockText)
+            VStack(spacing: 0) {
+                HStack {
+                    Text(configuration.language ?? "text")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Color(hex: 0x9A9A96))
+                    Spacer()
+                    Button {
+                        Self.copyToClipboard(configuration.content)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color(hex: 0x9A9A96))
+                    .help(L("msg.copy"))
                 }
-                .markdownMargin(top: .em(0.6), bottom: .em(0.6))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(Color(hex: 0x212120))
+
+                Divider()
+                    .overlay(Color(hex: 0x3A3A36))
+
+                ScrollView(.horizontal) {
+                    configuration.label
+                        .markdownTextStyle {
+                            FontFamilyVariant(.monospaced)
+                            FontSize(.em(0.88))
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                }
+            }
+            .background(AppearanceStore.claudeCodeBlockBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .markdownMargin(top: .em(0.6), bottom: .em(0.6))
         }
         .markdownBlockStyle(\.table) { configuration in
             configuration.label
@@ -103,5 +126,12 @@ struct MarkdownText: View {
     /// The markdown source with every LaTeX span swapped for a math image URL.
     private var rewrittenSource: String {
         MathSegmenter.rewrite(text)
+    }
+
+    /// Copies the raw code-block source to the pasteboard (code card button).
+    private static func copyToClipboard(_ string: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(string, forType: .string)
     }
 }
