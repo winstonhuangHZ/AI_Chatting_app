@@ -858,11 +858,26 @@ private struct UsageBarView: View {
         TokenUsage.summarize(messages, systemPrompt: systemPrompt, profileJSON: profileJSON)
     }
 
+    /// `true` when the relay returned a real `usage` for the last request.
+    private var hasRealUsage: Bool {
+        cacheUsage?.promptTokens != nil && cacheUsage?.completionTokens != nil
+    }
+
+    /// Tokens shown in the bar: the relay-reported REAL usage when available,
+    /// otherwise the local estimate for the next request.
+    private var displayInput: Int {
+        hasRealUsage ? (cacheUsage?.promptTokens ?? 0) : summary.input
+    }
+
+    private var displayOutput: Int {
+        hasRealUsage ? (cacheUsage?.completionTokens ?? 0) : summary.output
+    }
+
     private var costEstimate: TokenUsage.CostEstimate? {
         TokenUsage.estimatedCost(
             model: model,
-            inputTokens: summary.input,
-            outputTokens: summary.output,
+            inputTokens: displayInput,
+            outputTokens: displayOutput,
             freshTokens: summary.freshInput,
             dynamicPrices: dynamicPrices,
             customPrice: customPrice
@@ -890,9 +905,10 @@ private struct UsageBarView: View {
     var body: some View {
         HStack(spacing: 12) {
             Text(L("usage.tokens",
-                   TokenUsage.formatCount(summary.input),
-                   TokenUsage.formatCount(summary.output)))
+                   TokenUsage.formatCount(displayInput),
+                   TokenUsage.formatCount(displayOutput)))
                 .font(.caption).foregroundStyle(.secondary)
+                .help(L(hasRealUsage ? "usage.tokens.real" : "usage.tokens.estimate"))
 
             if let estimate = costEstimate {
                 Text("≈ \(TokenUsage.formatCost(estimate.full))")

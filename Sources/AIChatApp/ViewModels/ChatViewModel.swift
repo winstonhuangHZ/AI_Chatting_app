@@ -468,6 +468,11 @@ final class ChatViewModel: ObservableObject {
                         messages: history,
                         usageHandler: { [weak self] usage in
                             Task { @MainActor in self?.lastCacheUsage = usage }
+                        },
+                        reasoningHandler: { [weak self] reasoning in
+                            Task { @MainActor in
+                                self?.sessionStore.updateLastAssistantReasoning(reasoning, in: sessionID)
+                            }
                         }
                     )
 
@@ -514,6 +519,11 @@ final class ChatViewModel: ObservableObject {
                     messages: history,
                     usageHandler: { [weak self] usage in
                         Task { @MainActor in self?.lastCacheUsage = usage }
+                    },
+                    reasoningHandler: { [weak self] reasoning in
+                        Task { @MainActor in
+                            self?.sessionStore.updateLastAssistantReasoning(reasoning, in: sessionID)
+                        }
                     }
                 )
 
@@ -654,6 +664,10 @@ final class ChatViewModel: ObservableObject {
                 lastCacheUsage = usage
             case .toolRecord(let record):
                 toolFlow.append(record)
+            case .reasoning(let r):
+                // DeepSeek reasoning text for the final answer — persist it so
+                // the next request can pass it back.
+                sessionStore.updateLastAssistantReasoning(r, in: sessionID)
             }
         }
 

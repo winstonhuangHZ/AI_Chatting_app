@@ -115,6 +115,32 @@ private struct PayloadToolCallMessage: Encodable {
     let content: String?
     let tool_calls: [ToolCall]
 
+    /// DeepSeek reasoning models REQUIRE passing back the previous round's
+    /// `reasoning_content` when following up on a tool call.
+    let reasoning_content: String?
+
+    init(content: String?, tool_calls: [ToolCall], reasoning_content: String? = nil) {
+        self.content = content
+        self.tool_calls = tool_calls
+        self.reasoning_content = reasoning_content
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case role, content, tool_calls, reasoning_content
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(role, forKey: .role)
+        try container.encode(content, forKey: .content)
+        try container.encode(tool_calls, forKey: .tool_calls)
+        // Only emit reasoning_content when present (keeps payloads byte-identical
+        // for non-reasoning models and avoids "reasoning_content": null).
+        if let reasoning_content {
+            try container.encode(reasoning_content, forKey: .reasoning_content)
+        }
+    }
+
     struct ToolCall: Encodable {
         let id: String
         let type = "function"
@@ -207,6 +233,30 @@ private enum PayloadJSON: Encodable {
 private struct PayloadMessage: Encodable {
     let role: String
     let content: PayloadContent
+
+    /// DeepSeek reasoning models require passing back the previous
+    /// `reasoning_content` on assistant messages. Only emitted when non-nil so
+    /// non-reasoning relays/models see byte-identical payloads as before.
+    let reasoning_content: String?
+
+    init(role: String, content: PayloadContent, reasoning_content: String? = nil) {
+        self.role = role
+        self.content = content
+        self.reasoning_content = reasoning_content
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case role, content, reasoning_content
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(role, forKey: .role)
+        try container.encode(content, forKey: .content)
+        if let reasoning_content {
+            try container.encode(reasoning_content, forKey: .reasoning_content)
+        }
+    }
 }
 
 /// Message content: either a plain string or an array of content parts
@@ -307,12 +357,19 @@ enum ChatStreamEvent: Sendable {
 
     /// A completed tool call, recorded for the message-info popover.
     case toolRecord(MessageToolCallRecord)
+
+    /// Reasoning ("thinking") text for the final answer (DeepSeek).
+    case reasoning(String)
 }
 
 /// Accumulates fragmented streaming tool-call deltas for one index.
 private struct ToolRoundOutcome {
     var toolCalls: [Int: ToolCallAccumulator] = [:]
     var yieldedText = false
+
+    /// DeepSeek reasoning text accumulated during this round (must be passed
+    /// back on the follow-up tool round).
+    var reasoning = ""
 }
 
 private struct ToolCallAccumulator {
@@ -343,6 +400,9 @@ actor OpenAIService {
         struct Choice: Decodable {
             struct Delta: Decodable {
                 let content: String?
+
+                /// DeepSeek reasoning models stream their "thinking" here.
+                let reasoning_content: String?
 
                 /// Streaming tool-call fragments (one per index).
                 struct ToolCallDelta: Decodable {
@@ -379,6 +439,11 @@ actor OpenAIService {
         /// Extracts the delta text for this chunk, if any.
         var contentDelta: String? {
             choices?.first?.delta?.content
+        }
+
+        /// Extracts the reasoning ("thinking") delta, if any (DeepSeek).
+        var reasoningDelta: String? {
+            choices?.first?.delta?.reasoning_content
         }
 
         /// Extracts tool-call fragments for this chunk, if any.
@@ -509,15 +574,15 @@ actor OpenAIService {
                             image_url: PayloadImageURL(url: attachment.dataURI)
                         ))
                     }
-                    result.append(.message(PayloadMessage(role: message.role.rawValue, content: .parts(parts))))
+                    result.append(.message(PayloadMessage(role: message.role.rawValue, content: .parts(parts), reasoning_content: message.reasoningContent)))
                 } else if !message.attachments.isEmpty && !isVision {
                     let note = "[图片已附加但当前模型不支持视觉，已忽略]"
                     let content = message.content.isEmpty
                         ? note
                         : message.content + "\n\n" + note
-                    result.append(.message(PayloadMessage(role: message.role.rawValue, content: .text(content))))
+                    result.append(.message(PayloadMessage(role: message.role.rawValue, content: .text(content), reasoning_content: message.reasoningContent)))
                 } else {
-                    result.append(.message(PayloadMessage(role: message.role.rawValue, content: .text(message.content))))
+                    result.append(.message(PayloadMessage(role: message.role.rawValue, content: .text(message.content), reasoning_content: message.reasoningContent)))
                 }
                 continue
             }
@@ -581,9 +646,9 @@ actor OpenAIService {
 
             if parts.isEmpty {
                 // Nothing usable (e.g. encrypted PDF): fall back to raw content.
-                result.append(.message(PayloadMessage(role: message.role.rawValue, content: .text(message.content))))
+                result.append(.message(PayloadMessage(role: message.role.rawValue, content: .text(message.content), reasoning_content: message.reasoningContent)))
             } else {
-                result.append(.message(PayloadMessage(role: message.role.rawValue, content: .parts(parts))))
+                result.append(.message(PayloadMessage(role: message.role.rawValue, content: .parts(parts), reasoning_content: message.reasoningContent)))
             }
         }
         return result
@@ -768,6 +833,11 @@ actor OpenAIService {
 
                         // 本轮模型直接给出文本答案 → 完成。
                         if outcome.toolCalls.isEmpty {
+                            // DeepSeek reasoning models: hand the final answer's
+                            // thinking text to the caller so it can be persisted.
+                            if !outcome.reasoning.isEmpty {
+                                continuation.yield(.reasoning(outcome.reasoning))
+                            }
                             if !outcome.yieldedText {
                                 throw OpenAIServiceError.emptyStream
                             }
@@ -785,7 +855,10 @@ actor OpenAIService {
                                     id: acc.id.isEmpty ? "call_\(acc.name)" : acc.id,
                                     function: .init(name: acc.name, arguments: acc.arguments)
                                 )
-                            }
+                            },
+                            // DeepSeek reasoning models require passing the
+                            // previous round's thinking text back.
+                            reasoning_content: outcome.reasoning.isEmpty ? nil : outcome.reasoning
                         )
                         history.append(.toolCall(assistantMessage))
 
@@ -944,6 +1017,9 @@ actor OpenAIService {
                     outcome.yieldedText = true
                     continuation.yield(.text(delta))
                 }
+                if let r = chunk.reasoningDelta, !r.isEmpty {
+                    outcome.reasoning += r
+                }
                 if let deltas = chunk.toolCallDeltas {
                     for delta in deltas {
                         let index = delta.index ?? 0
@@ -985,7 +1061,8 @@ actor OpenAIService {
         config: APIServerConfig,
         model: String,
         messages: [ChatMessage],
-        usageHandler: ((StreamUsage) -> Void)? = nil
+        usageHandler: ((StreamUsage) -> Void)? = nil,
+        reasoningHandler: ((String) -> Void)? = nil
     ) async throws -> AsyncThrowingStream<String, Error> {
         let baseURL = try normalizedBaseURL(from: config.baseURL)
         guard !config.apiKey.isEmpty else {
@@ -1043,6 +1120,7 @@ actor OpenAIService {
                     }
 
                     var yieldedAnyContent = false
+                    var accumulatedReasoning = ""
 
                     for try await line in bytes.lines {
                         // Honour cancellation while streaming.
@@ -1078,6 +1156,9 @@ actor OpenAIService {
                                 yieldedAnyContent = true
                                 continuation.yield(delta)
                             }
+                            if let r = chunk.reasoningDelta, !r.isEmpty {
+                                accumulatedReasoning += r
+                            }
                         } catch {
                             // Skip malformed chunks (keep-alive / metadata).
                             continue
@@ -1086,6 +1167,11 @@ actor OpenAIService {
 
                     if !yieldedAnyContent {
                         throw OpenAIServiceError.emptyStream
+                    }
+                    // Hand the reasoning text (DeepSeek) to the caller for
+                    // persistence / next-request pass-back.
+                    if !accumulatedReasoning.isEmpty {
+                        reasoningHandler?(accumulatedReasoning)
                     }
                     continuation.finish()
 

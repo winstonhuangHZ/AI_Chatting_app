@@ -163,6 +163,18 @@ final class SessionStore: ObservableObject {
         sessions[sessionIndex].messages[msgIndex].toolFlow = flow
     }
 
+    /// Records the DeepSeek `reasoning_content` ("thinking") of the last
+    /// assistant message so the next request can pass it back (required by
+    /// DeepSeek reasoning models for tool-call rounds).
+    func updateLastAssistantReasoning(_ reasoning: String, in sessionID: UUID) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let msgIndex = sessions[sessionIndex].messages.indices.last,
+              sessions[sessionIndex].messages[msgIndex].role == .assistant else {
+            return
+        }
+        sessions[sessionIndex].messages[msgIndex].reasoningContent = reasoning
+    }
+
     /// Deletes a single message (by id) from the given session.
     func deleteMessage(_ message: ChatMessage, in sessionID: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }

@@ -175,6 +175,11 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     /// Tool-call flow executed while generating this assistant reply.
     var toolFlow: [MessageToolCallRecord]
 
+    /// DeepSeek reasoning models emit `reasoning_content` (the "thinking").
+    /// Persisted so the next request can pass it back (DeepSeek requires it
+    /// for tool-call rounds); never shown in the bubble.
+    var reasoningContent: String?
+
     // MARK: - Initializers
 
     init(
@@ -187,7 +192,8 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         sources: [ChatSource] = [],
         model: String? = nil,
         usage: MessageUsage? = nil,
-        toolFlow: [MessageToolCallRecord] = []
+        toolFlow: [MessageToolCallRecord] = [],
+        reasoningContent: String? = nil
     ) {
         self.id = id
         self.role = role
@@ -199,6 +205,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         self.model = model
         self.usage = usage
         self.toolFlow = toolFlow
+        self.reasoningContent = reasoningContent
     }
 
     /// Convenience factory for user messages (with optional image attachments).
@@ -242,5 +249,6 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         model = try container.decodeIfPresent(String.self, forKey: .model)
         usage = try container.decodeIfPresent(MessageUsage.self, forKey: .usage)
         toolFlow = try container.decodeIfPresent([MessageToolCallRecord].self, forKey: .toolFlow) ?? []
+        reasoningContent = try container.decodeIfPresent(String.self, forKey: .reasoningContent)
     }
 }
