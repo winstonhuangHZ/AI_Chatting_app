@@ -63,6 +63,8 @@ struct AIChatApp: App {
                 .environmentObject(userProfileStore)
                 .environmentObject(localizationManager)
                 .environmentObject(appearanceStore)
+                // Claude theme is a light cream palette — force light appearance.
+                .preferredColorScheme(appearanceStore.isClaudeTheme ? .light : nil)
                 .frame(minWidth: 900, minHeight: 600)
         }
         .windowStyle(.titleBar)

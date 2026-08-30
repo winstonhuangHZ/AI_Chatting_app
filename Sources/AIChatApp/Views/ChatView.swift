@@ -15,6 +15,9 @@ struct ChatView: View {
     @EnvironmentObject private var chatViewModel: ChatViewModel
     @EnvironmentObject private var configStore: ConfigStore
 
+    /// 全局外观（字体预设 / 字号 / 主题）。
+    @EnvironmentObject private var appearance: AppearanceStore
+
     /// 界面本地化——语言切换时即时刷新全部文本。
     @EnvironmentObject private var localization: LocalizationManager
 
@@ -71,7 +74,7 @@ struct ChatView: View {
                 isStreaming: chatViewModel.isStreaming
             )
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(appearance.chatBackground)
         .onReceive(chatViewModel.$sessions) { sessions in
             if let activeID = chatViewModel.activeSessionID,
                let session = sessions.first(where: { $0.id == activeID }) {
@@ -426,6 +429,7 @@ private struct MessageBubble: View {
                     } else {
                         Text(contentDisplay)
                             .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
+                            .foregroundStyle(appearance.userBubbleTextColor)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(bubbleBackground)
@@ -595,9 +599,9 @@ private struct MessageBubble: View {
     private var bubbleBackground: Color {
         switch message.role {
         case .user:
-            return Color.accentColor.opacity(0.15)
+            return appearance.userBubbleColor
         case .assistant:
-            return Color(nsColor: .controlBackgroundColor)
+            return appearance.assistantBubbleColor
         case .system:
             return Color(nsColor: .selectedControlColor).opacity(0.4)
         }

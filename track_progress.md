@@ -90,3 +90,18 @@
 - [x] 数值验证：优先级 + 缓存成本计算全对（full=1.686 / cached=0.576）
 - [x] 移除冗余 `get_time` 工具（系统已内置时间戳注入）
 
+---
+
+## 附加：Claude 风格主题（米白背景 + 橙色消息框）
+
+- [x] **配色来源**：联网抓取 Claude-inspired 主题（`Xv-Bowen/claude-like-typora-theme`）的完整 CSS 变量：
+  - 背景 `#F9F9F7` / 侧栏 `#F4F4F2` / 抬升面 `#FFFFFF`
+  - 粘土橙 `#CC7D5E`（用户气泡）/ 深橙 `#A95639` / 主文本 `#2D2D2B` / 次要文本 `#6B6B67`
+- [x] **`AppearanceStore.swift`**：新增 `ChatTheme`（system / claude）+ `theme` 持久化 + Claude 调色板常量 + 各区域取色 helper（chatBackground / userBubbleColor / userBubbleTextColor / assistantBubbleColor / sidebarBackground）
+- [x] **`AppMain.swift`**：Claude 主题强制 `.preferredColorScheme(.light)`
+- [x] **`ChatView.swift`**：聊天区米白背景、用户消息粘土橙实心气泡 + 白字、AI 消息纯白气泡
+- [x] **`SidebarView.swift`**：侧栏米灰表面（List `scrollContentBackground(.hidden)`）
+- [x] **`AppearancePickerView.swift`**：设置页「主题」选择器（跟随系统 / Claude 米白橙）
+- [x] **`AppLanguage.swift`**：`appearance.theme` / `theme.system` / `theme.claude` 六语言文案
+- [x] 构建 + 打包 + 启动冒烟通过
+

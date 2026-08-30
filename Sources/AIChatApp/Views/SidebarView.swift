@@ -24,6 +24,7 @@ struct SidebarView: View {
                 sessionList
             }
         }
+        .background(appearance.sidebarBackground)
         .safeAreaInset(edge: .top) {
             VStack(spacing: 6) {
                 searchField
@@ -116,6 +117,7 @@ struct SidebarView: View {
                     .tag(result.id)
                 }
                 .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
             }
         }
     }
@@ -151,6 +153,7 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
     }
 }
 
