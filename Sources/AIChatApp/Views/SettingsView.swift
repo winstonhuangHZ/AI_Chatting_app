@@ -79,7 +79,7 @@ private struct ProfileListView: View {
                     Spacer()
                     Button(action: onAdd) { Label(L("add.profile"), systemImage: "plus") }
                         .buttonStyle(.borderedProminent)
-                        .tint(appearanceStore.accentColor)
+                        .tint(appearanceStore.prominentButtonColor)
                 }
                 .padding(16)
 
@@ -93,7 +93,7 @@ private struct ProfileListView: View {
                     } actions: {
                         Button(L("add.profile"), action: onAdd)
                             .buttonStyle(.borderedProminent)
-                            .tint(appearanceStore.accentColor)
+                            .tint(appearanceStore.prominentButtonColor)
                     }
                     .frame(height: 220)
                 } else {
@@ -434,7 +434,7 @@ private struct ProfileEditView: View {
                     Text(isNew ? L("add") : L("save"))
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(appearanceStore.accentColor)
+                .tint(appearanceStore.prominentButtonColor)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!isValid)
             }

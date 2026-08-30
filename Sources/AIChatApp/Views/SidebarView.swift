@@ -36,7 +36,7 @@ struct SidebarView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(appearance.accentColor)
+                .tint(appearance.prominentButtonColor)
                 .controlSize(.large)
                 .disabled(isSearching)
             }

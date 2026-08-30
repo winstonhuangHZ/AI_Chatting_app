@@ -249,10 +249,18 @@ final class AppearanceStore: ObservableObject {
 
     /// 主题强调色（Claude 主题为粘土橙 `#CC7D5E`，否则为系统 accentColor）。
     ///
-    /// 用于 New Chat / 发送 / 设置保存等主按钮与高亮元素，让 Claude 主题
-    /// 的界面色系整体统一（不再残留系统蓝）。
+    /// 用于发送按钮 / 头像 / 高亮等前景元素。
     var accentColor: Color {
         isClaudeTheme ? Self.claudeAccent : Color.accentColor
+    }
+
+    /// 主按钮（`borderedProminent`）填充色。
+    ///
+    /// macOS 会对 prominent 按钮叠加半透明材质，粘土橙 `#CC7D5E` 大面积
+    /// 填充后会明显发暗；Claude 主题因此改用更亮的品牌橙 `#D97757`
+    /// （Claude.ai terracotta），视觉上与发送按钮的粘土橙一致。
+    var prominentButtonColor: Color {
+        isClaudeTheme ? Color(hex: 0xD97757) : Color.accentColor
     }
 
     /// 当前字号（points）。
