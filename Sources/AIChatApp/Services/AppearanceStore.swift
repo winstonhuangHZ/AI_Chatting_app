@@ -269,6 +269,12 @@ final class AppearanceStore: ObservableObject {
         isClaudeTheme ? Color(hex: 0xD97757) : Color.accentColor
     }
 
+    /// 侧栏选中会话行的背景（自绘，覆盖 macOS 列表的系统蓝高亮）。
+    /// Claude 主题为淡粘土橙；跟随系统时用系统 accent 的淡色，行为不变。
+    var sidebarSelectionColor: Color {
+        isClaudeTheme ? Self.claudeAccent.opacity(0.16) : Color.accentColor.opacity(0.15)
+    }
+
     /// 当前字号（points）。
     var pointSize: CGFloat {
         fontSizeLevel.pointSize

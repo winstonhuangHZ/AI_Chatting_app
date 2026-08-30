@@ -200,6 +200,12 @@ private struct SidebarRow: View {
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
+        // Self-drawn selection highlight: covers the macOS system-blue List
+        // selection so the tint follows the active theme (clay on Claude).
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected ? appearance.sidebarSelectionColor : Color.clear)
+        )
     }
 }
 
