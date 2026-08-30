@@ -22,6 +22,17 @@ struct AppearancePickerView: View {
             Label(L("appearance.font"), systemImage: "textformat")
                 .font(.headline)
 
+            // 主题：跟随系统 / Claude 米白橙。
+            Picker(L("appearance.theme"), selection: $appearance.theme) {
+                ForEach(ChatTheme.allCases) { theme in
+                    Text(theme.displayName)
+                        .tag(theme)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: 280)
+            .tint(appearance.accentColor)
+
             // 字体预设选择暂隐藏（保留代码，见 AppearanceStore TODO 注释）。
             if appearance.isFontPresetSelectionEnabled {
                 Picker(L("appearance.font"), selection: $appearance.fontPreset) {
@@ -42,6 +53,7 @@ struct AppearancePickerView: View {
             }
             .pickerStyle(.menu)
             .frame(maxWidth: 280)
+            .tint(appearance.accentColor)
 
             // 字号预览（跟随当前预设，默认 sans）。
             Text(L("appearance.sample"))

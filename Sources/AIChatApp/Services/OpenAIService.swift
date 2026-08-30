@@ -53,24 +53,28 @@ enum OpenAIServiceError: LocalizedError, Equatable {
 /// Top-level `/v1/chat/completions` request body with stable field order.
 private struct ChatPayload: Encodable {
     let model: String
-    let messages: [PayloadMessage]
+    let messages: [PayloadItem]
     let stream: Bool
 
     /// DeepSeek-reasoner-compatible relays require `enable_thinking: false`
     /// for non-streaming; nil omits the field entirely (streaming path).
     var enable_thinking: Bool?
 
+    /// Optional `tools` (function calling). nil omits the field so tool-less
+    /// requests stay byte-identical to a standard OpenAI request.
+    var tools: [PayloadTool]?
+
     enum CodingKeys: String, CodingKey {
         case model
         case messages
         case stream
         case enable_thinking
+        case tools
     }
 
-    /// Custom encode: `enable_thinking` is emitted ONLY when non-nil so the
-    /// streaming payload stays byte-identical to a standard OpenAI request
-    /// (no `"enable_thinking": null` pollution that breaks cache matches or
-    /// strict backends).
+    /// Custom encode: optional fields are emitted ONLY when non-nil so the
+    /// payload stays byte-identical to a standard OpenAI request (no
+    /// `"field": null` pollution that breaks cache matches or strict backends).
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(model, forKey: .model)
@@ -78,6 +82,123 @@ private struct ChatPayload: Encodable {
         try container.encode(stream, forKey: .stream)
         if let enable_thinking {
             try container.encode(enable_thinking, forKey: .enable_thinking)
+        }
+        if let tools {
+            try container.encode(tools, forKey: .tools)
+        }
+    }
+}
+
+/// One entry of the `messages` array: a regular chat message, an assistant
+/// message carrying `tool_calls`, or a `role: tool` result message.
+private enum PayloadItem: Encodable {
+    case message(PayloadMessage)
+    case toolCall(PayloadToolCallMessage)
+    case toolResult(PayloadToolResultMessage)
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .message(let message):
+            try container.encode(message)
+        case .toolCall(let message):
+            try container.encode(message)
+        case .toolResult(let message):
+            try container.encode(message)
+        }
+    }
+}
+
+/// Assistant message that carries tool-call requests (inside the tool loop).
+private struct PayloadToolCallMessage: Encodable {
+    let role = "assistant"
+    let content: String?
+    let tool_calls: [ToolCall]
+
+    struct ToolCall: Encodable {
+        let id: String
+        let type = "function"
+
+        struct Function: Encodable {
+            let name: String
+            let arguments: String
+        }
+
+        let function: Function
+
+        enum CodingKeys: String, CodingKey {
+            case id, type, function
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(id, forKey: .id)
+            try container.encode(type, forKey: .type)
+            try container.encode(function, forKey: .function)
+        }
+    }
+}
+
+/// `role: tool` message appended after a tool finishes executing.
+private struct PayloadToolResultMessage: Encodable {
+    let role = "tool"
+    let tool_call_id: String
+    let content: String
+}
+
+/// `tools[].function` wrapper.
+private struct PayloadTool: Encodable {
+    let type = "function"
+    let function: PayloadToolFunction
+}
+
+/// The `function` object of a tool definition.
+private struct PayloadToolFunction: Encodable {
+    let name: String
+    let description: String
+    let parameters: PayloadJSON
+
+    init(name: String, description: String, parameters: [String: Any]) {
+        self.name = name
+        self.description = description
+        self.parameters = PayloadJSON(fromAny: parameters)
+    }
+}
+
+/// Recursive JSON value that can be encoded into a tool schema.
+private enum PayloadJSON: Encodable {
+    case object([String: PayloadJSON])
+    case array([PayloadJSON])
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case null
+
+    init(fromAny value: Any) {
+        if let bool = value as? Bool {
+            self = .bool(bool)
+        } else if let number = value as? NSNumber {
+            self = .number(number.doubleValue)
+        } else if let string = value as? String {
+            self = .string(string)
+        } else if let array = value as? [Any] {
+            self = .array(array.map { PayloadJSON(fromAny: $0) })
+        } else if let dict = value as? [String: Any] {
+            self = .object(dict.mapValues { PayloadJSON(fromAny: $0) })
+        } else {
+            self = .null
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .object(let dict): try container.encode(dict)
+        case .array(let array): try container.encode(array)
+        case .string(let string): try container.encode(string)
+        case .number(let number): try container.encode(number)
+        case .bool(let bool): try container.encode(bool)
+        case .null: try container.encodeNil()
         }
     }
 }
@@ -142,6 +263,33 @@ private struct PayloadImageURL: Encodable {
 /// - `GET /v1/models` (returns model list **and** dynamic prices, if any)
 /// - `POST /v1/chat/completions` with **SSE streaming** exposed via
 ///   `AsyncThrowingStream<String, Error>`.
+/// Events yielded by `streamChatWithTools` (function calling).
+enum ChatStreamEvent: Sendable {
+    /// A text delta of the final answer.
+    case text(String)
+
+    /// The model asked to run a tool (shown in the placeholder bubble).
+    case toolActivity(String)
+
+    /// A tool finished executing.
+    case toolFinished(String)
+
+    /// Source references collected from web tools (rendered below the answer).
+    case sources([ChatSource])
+}
+
+/// Accumulates fragmented streaming tool-call deltas for one index.
+private struct ToolRoundOutcome {
+    var toolCalls: [Int: ToolCallAccumulator] = [:]
+    var yieldedText = false
+}
+
+private struct ToolCallAccumulator {
+    var id = ""
+    var name = ""
+    var arguments = ""
+}
+
 actor OpenAIService {
 
     // MARK: - Nested response types
@@ -164,14 +312,35 @@ actor OpenAIService {
         struct Choice: Decodable {
             struct Delta: Decodable {
                 let content: String?
+
+                /// Streaming tool-call fragments (one per index).
+                struct ToolCallDelta: Decodable {
+                    let index: Int?
+                    let id: String?
+                    struct FunctionDelta: Decodable {
+                        let name: String?
+                        let arguments: String?
+                    }
+                    let function: FunctionDelta?
+                }
+
+                let tool_calls: [ToolCallDelta]?
             }
+
             let delta: Delta?
+            let finish_reason: String?
         }
+
         let choices: [Choice]?
 
         /// Extracts the delta text for this chunk, if any.
         var contentDelta: String? {
             choices?.first?.delta?.content
+        }
+
+        /// Extracts tool-call fragments for this chunk, if any.
+        var toolCallDeltas: [Choice.Delta.ToolCallDelta]? {
+            choices?.first?.delta?.tool_calls
         }
     }
 
@@ -198,7 +367,65 @@ actor OpenAIService {
         self.session = URLSession(configuration: configuration)
     }
 
-    // MARK: - Payload builders
+    // MARK: - PDF preparation cache
+    //
+    // Rendering PDF pages / extracting text is CPU-heavy, so results are
+    // memoized per attachment. This lets Retry and subsequent requests reuse
+    // the work instead of re-processing the whole document every time.
+
+    private actor PDFPrepCache {
+        static let shared = PDFPrepCache()
+
+        /// attachment id → base64 PNG page images (vision models).
+        private var pages: [UUID: [String]] = [:]
+
+        /// attachment id → extracted text (text-only models).
+        private var texts: [UUID: String] = [:]
+
+        func pages(for id: UUID) -> [String]? { pages[id] }
+        func setPages(_ value: [String], for id: UUID) {
+            if pages.count > 24 { pages.removeAll() }
+            pages[id] = value
+        }
+        func text(for id: UUID) -> String? { texts[id] }
+        func setText(_ value: String, for id: UUID) {
+            if texts.count > 24 { texts.removeAll() }
+            texts[id] = value
+        }
+    }
+
+    /// Renders a PDF into base64 PNG pages (memoized), off the main thread.
+    private static func pdfPageImages(for document: DocumentAttachment) async -> [String] {
+        if let cached = await PDFPrepCache.shared.pages(for: document.id), !cached.isEmpty {
+            return cached
+        }
+        guard let data = document.decodedData, !data.isEmpty else { return [] }
+        let images = await Task.detached(priority: .userInitiated) {
+            PDFProcessor.renderPages(from: data).map { $0.base64EncodedString() }
+        }.value
+        await PDFPrepCache.shared.setPages(images, for: document.id)
+        return images
+    }
+
+    /// Extracts a PDF's text layer (memoized), off the main thread.
+    private static func pdfText(for document: DocumentAttachment) async -> String {
+        if let cached = await PDFPrepCache.shared.text(for: document.id) {
+            return cached
+        }
+        guard let data = document.decodedData, !data.isEmpty else { return "" }
+        let text = await Task.detached(priority: .userInitiated) {
+            PDFProcessor.extractText(from: data)
+        }.value
+        await PDFPrepCache.shared.setText(text, for: document.id)
+        return text
+    }
+
+    /// Formats extracted PDF text for inclusion as a content part.
+    private static func pdfTextPart(_ document: DocumentAttachment, _ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = trimmed.count > 20000 ? String(trimmed.prefix(20000)) + "\n…[内容过长已截断]" : trimmed
+        return "[📄 文档：\(document.filename)]\n\(body)"
+    }
 
     /// Builds the wire-format `messages` array.
     ///
@@ -208,23 +435,80 @@ actor OpenAIService {
     /// prompt prefix (which would wreck upstream caching for everyone).
     ///   - text + images  → keep the text, drop the images
     ///   - images only    → replace with a short placeholder
+    ///
+    /// PDF documents are processed according to the model:
+    ///   - vision    → page images (`image_url` parts, first N pages)
+    ///   - text-only → extracted text as a content part
     private static func payloadMessages(
         from messages: [ChatMessage],
         model: String
-    ) -> [PayloadMessage] {
+    ) async -> [PayloadItem] {
         let isVision = MultimodalSupport.isMultimodal(model)
+        var result: [PayloadItem] = []
 
-        return messages.map { message in
-            if !message.attachments.isEmpty && isVision {
-                // Multimodal model: standard image_url parts list.
-                var parts: [PayloadContentPart] = []
-                if !message.content.isEmpty {
-                    parts.append(PayloadContentPart(
-                        type: "text",
-                        text: message.content,
-                        image_url: nil
-                    ))
+        for message in messages {
+            // ---- No documents: keep the pre-existing wire format untouched
+            // ---- (byte-stable prompt prefix for upstream caching).
+            if message.documentAttachments.isEmpty {
+                if !message.attachments.isEmpty && isVision {
+                    var parts: [PayloadContentPart] = []
+                    if !message.content.isEmpty {
+                        parts.append(PayloadContentPart(
+                            type: "text",
+                            text: message.content,
+                            image_url: nil
+                        ))
+                    }
+                    for attachment in message.attachments {
+                        parts.append(PayloadContentPart(
+                            type: "image_url",
+                            text: nil,
+                            image_url: PayloadImageURL(url: attachment.dataURI)
+                        ))
+                    }
+                    result.append(.message(PayloadMessage(role: message.role.rawValue, content: .parts(parts))))
+                } else if !message.attachments.isEmpty && !isVision {
+                    let note = "[图片已附加但当前模型不支持视觉，已忽略]"
+                    let content = message.content.isEmpty
+                        ? note
+                        : message.content + "\n\n" + note
+                    result.append(.message(PayloadMessage(role: message.role.rawValue, content: .text(content))))
+                } else {
+                    result.append(.message(PayloadMessage(role: message.role.rawValue, content: .text(message.content))))
                 }
+                continue
+            }
+
+            // ---- Messages carrying PDF document(s).
+            var parts: [PayloadContentPart] = []
+            if !message.content.isEmpty {
+                parts.append(PayloadContentPart(type: "text", text: message.content, image_url: nil))
+            }
+
+            if isVision {
+                for document in message.documentAttachments {
+                    let pages = await pdfPageImages(for: document)
+                    if pages.isEmpty {
+                        // Render failed (scanned/encrypted PDF): fall back to text.
+                        let text = await pdfText(for: document)
+                        if !text.isEmpty {
+                            parts.append(PayloadContentPart(
+                                type: "text",
+                                text: pdfTextPart(document, text),
+                                image_url: nil
+                            ))
+                        }
+                    } else {
+                        for base64 in pages {
+                            parts.append(PayloadContentPart(
+                                type: "image_url",
+                                text: nil,
+                                image_url: PayloadImageURL(url: "data:image/png;base64,\(base64)")
+                            ))
+                        }
+                    }
+                }
+                // Regular image attachments still apply for vision models.
                 for attachment in message.attachments {
                     parts.append(PayloadContentPart(
                         type: "image_url",
@@ -232,20 +516,34 @@ actor OpenAIService {
                         image_url: PayloadImageURL(url: attachment.dataURI)
                     ))
                 }
-                return PayloadMessage(role: message.role.rawValue, content: .parts(parts))
-
-            } else if !message.attachments.isEmpty && !isVision {
-                // Non-multimodal model: downgrade images to a text note.
-                let note = "[图片已附加但当前模型不支持视觉，已忽略]"
-                let content = message.content.isEmpty
-                    ? note
-                    : message.content + "\n\n" + note
-                return PayloadMessage(role: message.role.rawValue, content: .text(content))
-
             } else {
-                return PayloadMessage(role: message.role.rawValue, content: .text(message.content))
+                for document in message.documentAttachments {
+                    let text = await pdfText(for: document)
+                    if !text.isEmpty {
+                        parts.append(PayloadContentPart(
+                            type: "text",
+                            text: pdfTextPart(document, text),
+                            image_url: nil
+                        ))
+                    }
+                }
+                if !message.attachments.isEmpty {
+                    parts.append(PayloadContentPart(
+                        type: "text",
+                        text: "[图片已附加但当前模型不支持视觉，已忽略]",
+                        image_url: nil
+                    ))
+                }
+            }
+
+            if parts.isEmpty {
+                // Nothing usable (e.g. encrypted PDF): fall back to raw content.
+                result.append(.message(PayloadMessage(role: message.role.rawValue, content: .text(message.content))))
+            } else {
+                result.append(.message(PayloadMessage(role: message.role.rawValue, content: .parts(parts))))
             }
         }
+        return result
     }
 
     // MARK: - URL normalization
@@ -369,6 +667,242 @@ actor OpenAIService {
         }
     }
 
+    // MARK: - Streaming chat completion with tools (function calling)
+
+    /// Streams a chat completion **with built-in tool calling** (Agent mode).
+    ///
+    /// Runs the full tool loop internally: sends the request with `tools`,
+    /// streams text deltas, and when the model asks to call a tool, executes
+    /// it (off the main thread), appends the `assistant(tool_calls)` + `tool`
+    /// result messages, and sends the next round — up to `maxRounds` times.
+    /// The caller sees only `ChatStreamEvent`s, so the UI stays streaming.
+    func streamChatWithTools(
+        config: APIServerConfig,
+        model: String,
+        messages: [ChatMessage]
+    ) async throws -> AsyncThrowingStream<ChatStreamEvent, Error> {
+        let baseURL = try normalizedBaseURL(from: config.baseURL)
+        guard !config.apiKey.isEmpty else {
+            throw OpenAIServiceError.missingAPIKey
+        }
+        guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw OpenAIServiceError.transport("No model selected.")
+        }
+
+        let url = baseURL.appendingPathComponent("chat/completions")
+        let tools: [PayloadTool] = ChatTools.all.map { tool in
+            PayloadTool(function: PayloadToolFunction(
+                name: tool.name,
+                description: tool.description,
+                parameters: tool.parameters
+            ))
+        }
+        let maxRounds = 5
+
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var history = await Self.payloadMessages(from: messages, model: model)
+                    var round = 0
+                    var gotFinalAnswer = false
+                    var collectedSources: [ChatSource] = []
+
+                    while round < maxRounds {
+                        round += 1
+                        let outcome = try await performToolRound(
+                            url: url,
+                            model: model,
+                            apiKey: config.apiKey,
+                            history: history,
+                            tools: tools,
+                            continuation: continuation
+                        )
+
+                        // 本轮模型直接给出文本答案 → 完成。
+                        if outcome.toolCalls.isEmpty {
+                            if !outcome.yieldedText {
+                                throw OpenAIServiceError.emptyStream
+                            }
+                            gotFinalAnswer = true
+                            break
+                        }
+
+                        // 执行工具（容错：失败也返回错误文本让模型调整），
+                        // 追加 assistant(tool_calls) + tool 结果后继续下一轮。
+                        let sorted = outcome.toolCalls.sorted { $0.key < $1.key }
+                        let assistantMessage = PayloadToolCallMessage(
+                            content: nil,
+                            tool_calls: sorted.map { _, acc in
+                                PayloadToolCallMessage.ToolCall(
+                                    id: acc.id.isEmpty ? "call_\(acc.name)" : acc.id,
+                                    function: .init(name: acc.name, arguments: acc.arguments)
+                                )
+                            }
+                        )
+                        history.append(.toolCall(assistantMessage))
+
+                        for (_, acc) in sorted {
+                            let toolName = acc.name.isEmpty ? "unknown" : acc.name
+                            continuation.yield(.toolActivity(toolName))
+                            let result: String
+                            do {
+                                result = try await ChatTools.execute(
+                                    name: acc.name,
+                                    argumentsJSON: acc.arguments
+                                )
+                            } catch {
+                                result = "Error executing tool \(toolName): \(error.localizedDescription)"
+                            }
+                            continuation.yield(.toolFinished(toolName))
+                            collectedSources.append(contentsOf: ChatTools.sources(for: acc.name, result: result))
+                            history.append(.toolResult(PayloadToolResultMessage(
+                                tool_call_id: acc.id.isEmpty ? "call_\(toolName)" : acc.id,
+                                content: result
+                            )))
+                        }
+                    }
+
+                    // 循环耗尽仍无文本答案（模型每轮都只返回 tool_calls）：
+                    // 追加一轮**不带 tools** 的收尾请求，强制模型基于已执行
+                    // 的工具结果整理出最终答案，避免"工具用完就静默结束"。
+                    if !gotFinalAnswer {
+                        let outcome = try await performToolRound(
+                            url: url,
+                            model: model,
+                            apiKey: config.apiKey,
+                            history: history,
+                            tools: nil,
+                            continuation: continuation
+                        )
+                        if !outcome.yieldedText {
+                            throw OpenAIServiceError.emptyStream
+                        }
+                    }
+
+                    // Deliver collected sources (web references) before finishing.
+                    if !collectedSources.isEmpty {
+                        continuation.yield(.sources(collectedSources))
+                    }
+
+                    continuation.finish()
+
+                } catch let error as URLError where error.code == .cancelled {
+                    continuation.finish()
+                } catch let error as URLError where error.code == .timedOut {
+                    continuation.finish(
+                        throwing: OpenAIServiceError.transport("Request timed out.")
+                    )
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch let error as OpenAIServiceError {
+                    continuation.finish(throwing: error)
+                } catch {
+                    continuation.finish(
+                        throwing: OpenAIServiceError.transport(error.localizedDescription)
+                    )
+                }
+            }
+
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
+    /// One round of the tool loop: streams a chat completion, yields text
+    /// deltas, and returns any tool-call fragments the model requested.
+    ///
+    /// `tools` is optional: pass `nil` for the final answer round after the
+    /// tool budget is exhausted — the model then has to respond in plain text.
+    private func performToolRound(
+        url: URL,
+        model: String,
+        apiKey: String,
+        history: [PayloadItem],
+        tools: [PayloadTool]?,
+        continuation: AsyncThrowingStream<ChatStreamEvent, Error>.Continuation
+    ) async throws -> ToolRoundOutcome {
+        let payload = ChatPayload(
+            model: model,
+            messages: history,
+            stream: true,
+            tools: tools
+        )
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 300
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        do {
+            request.httpBody = try JSONEncoder().encode(payload)
+        } catch {
+            throw OpenAIServiceError.transport(
+                "Failed to encode request body: \(error.localizedDescription)"
+            )
+        }
+
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw OpenAIServiceError.transport("Invalid HTTP response.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            var errorData = Data()
+            for try await byte in bytes {
+                errorData.append(byte)
+                if errorData.count > 8192 { break }
+            }
+            throw OpenAIServiceError.httpError(
+                statusCode: http.statusCode,
+                message: Self.decodeErrorMessage(from: errorData)
+            )
+        }
+
+        var outcome = ToolRoundOutcome()
+
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix(":") else { continue }
+            guard trimmed.hasPrefix("data:") else { continue }
+
+            let data = String(trimmed.dropFirst("data:".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if data == "[DONE]" || data.uppercased().contains("[DONE]") {
+                break
+            }
+            guard let chunkData = data.data(using: .utf8) else { continue }
+            do {
+                let chunk = try JSONDecoder().decode(StreamChunk.self, from: chunkData)
+                if let delta = chunk.contentDelta, !delta.isEmpty {
+                    outcome.yieldedText = true
+                    continuation.yield(.text(delta))
+                }
+                if let deltas = chunk.toolCallDeltas {
+                    for delta in deltas {
+                        let index = delta.index ?? 0
+                        var acc = outcome.toolCalls[index] ?? ToolCallAccumulator()
+                        if let id = delta.id, !id.isEmpty { acc.id = id }
+                        if let name = delta.function?.name, !name.isEmpty {
+                            acc.name += name
+                        }
+                        if let arguments = delta.function?.arguments, !arguments.isEmpty {
+                            acc.arguments += arguments
+                        }
+                        outcome.toolCalls[index] = acc
+                    }
+                }
+            } catch {
+                // Skip malformed chunks (keep-alive / metadata).
+                continue
+            }
+        }
+
+        return outcome
+    }
+
+
     // MARK: - Streaming chat completion
 
     /// Streams a chat completion for the given profile and message history.
@@ -386,7 +920,7 @@ actor OpenAIService {
         config: APIServerConfig,
         model: String,
         messages: [ChatMessage]
-    ) throws -> AsyncThrowingStream<String, Error> {
+    ) async throws -> AsyncThrowingStream<String, Error> {
         let baseURL = try normalizedBaseURL(from: config.baseURL)
         guard !config.apiKey.isEmpty else {
             throw OpenAIServiceError.missingAPIKey
@@ -408,7 +942,7 @@ actor OpenAIService {
         // identical payloads produce byte-identical requests → cloud cache works.
         let payload = ChatPayload(
             model: model,
-            messages: Self.payloadMessages(from: messages, model: model),
+            messages: await Self.payloadMessages(from: messages, model: model),
             stream: true
         )
 
@@ -534,7 +1068,7 @@ actor OpenAIService {
         // DeepSeek-reasoner-compatible relays (thinking needs streaming).
         let payload = ChatPayload(
             model: model,
-            messages: Self.payloadMessages(from: messages, model: model),
+            messages: await Self.payloadMessages(from: messages, model: model),
             stream: false,
             enable_thinking: false
         )

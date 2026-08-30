@@ -14,20 +14,12 @@ enum TokenUsage {
     // MARK: - Token counting
 
     /// Heuristically estimates the token count of a text string.
+    ///
+    /// Uses `AccurateTokenCounter` (cl100k_base approximate) instead of the
+    /// old flat "4 ASCII chars = 1 token" heuristic — much closer to what the
+    /// relay bills, especially for mixed CJK/English chat text.
     static func estimateTokens(_ text: String) -> Int {
-        guard !text.isEmpty else { return 0 }
-
-        var weightedUnits = 0
-        for scalar in text.unicodeScalars {
-            // ASCII (letters/digits/space/punct) counts 1 unit.
-            if scalar.isASCII {
-                weightedUnits += 1
-            } else {
-                // CJK / emoji / full-width — treat as 4 units (≈1 token).
-                weightedUnits += 4
-            }
-        }
-        return max(1, Int((Double(weightedUnits) / 4.0).rounded()))
+        AccurateTokenCounter.count(text)
     }
 
     /// Heuristic tokens for one image attachment.
@@ -62,12 +54,15 @@ enum TokenUsage {
         for message in messages {
             let textTokens = estimateTokens(message.content)
             let imageTokens = message.attachments.count * tokensPerImage
+            // PDFs are rendered to page images for vision models.
+            let documentTokens = message.documentAttachments
+                .reduce(0) { $0 + $1.pageCount } * tokensPerImage
 
             switch message.role {
             case .assistant:
                 output += textTokens
             case .user, .system:
-                input += textTokens + imageTokens
+                input += textTokens + imageTokens + documentTokens
             }
         }
         return (input, output)
@@ -102,38 +97,94 @@ enum TokenUsage {
     /// Priority:
     /// 1. Dynamic prices fetched from the relay (`modelPrices` dict).
     /// 2. Built-in fallback table (keyword match on model id).
-    static func prices(
+    /// Resolved pricing for a model (input / output / optional cached-input).
+    struct ModelPricing: Equatable {
+        let input: Double
+        let output: Double
+        let cachedInput: Double?
+    }
+
+    /// Cost estimate: `full` assumes no prompt-cache hit; `cached` (when the
+    /// model/prices expose a cached-input rate) assumes the whole input
+    /// prefix is served from the cache.
+    struct CostEstimate: Equatable {
+        let full: Double
+        let cached: Double?
+    }
+
+    /// Resolves effective prices for a model id.
+    ///
+    /// Priority:
+    /// 1. User-defined custom price (`customPrice`).
+    /// 2. Dynamic prices fetched from the relay (`modelPrices` dict).
+    /// 3. Built-in fallback table (keyword match on model id).
+    static func pricing(
         for modelID: String,
-        dynamicPrices: [String: ModelPrice] = [:]
-    ) -> (input: Double, output: Double)? {
-        // 1) Relay-provided dynamic price (exact model id match).
-        if let price = dynamicPrices[modelID], price.isValid {
-            return (price.prompt, price.completion)
+        dynamicPrices: [String: ModelPrice] = [:],
+        customPrice: CustomPrice? = nil
+    ) -> ModelPricing? {
+        // 1) User-defined custom price wins (manual overrides for relays
+        //    that do not expose pricing data).
+        if let customPrice, customPrice.isValid {
+            return ModelPricing(
+                input: customPrice.input,
+                output: customPrice.output,
+                cachedInput: customPrice.cachedInput
+            )
         }
 
-        // 2) Built-in fallback.
+        // 2) Relay-provided dynamic price (exact model id match).
+        if let price = dynamicPrices[modelID], price.isValid {
+            return ModelPricing(input: price.prompt, output: price.completion, cachedInput: nil)
+        }
+
+        // 3) Built-in fallback.
         let lower = modelID.lowercased()
         for entry in priceTable {
             let matched = entry.keywords.contains { lower.contains($0) }
             if matched {
-                return (entry.input, entry.output)
+                return ModelPricing(input: entry.input, output: entry.output, cachedInput: nil)
             }
         }
         return nil
     }
 
+    /// Tuple convenience variant of `pricing` (legacy callers).
+    static func prices(
+        for modelID: String,
+        dynamicPrices: [String: ModelPrice] = [:],
+        customPrice: CustomPrice? = nil
+    ) -> (input: Double, output: Double)? {
+        guard let pricing = pricing(for: modelID, dynamicPrices: dynamicPrices, customPrice: customPrice) else {
+            return nil
+        }
+        return (pricing.input, pricing.output)
+    }
+
     /// Computes estimated cost in USD for a model + token counts, preferring
-    /// relay-provided dynamic prices.
+    /// user-defined custom price, then relay dynamic prices.
     static func estimatedCost(
         model: String,
         inputTokens: Int,
         outputTokens: Int,
-        dynamicPrices: [String: ModelPrice] = [:]
-    ) -> Double? {
-        guard let prices = prices(for: model, dynamicPrices: dynamicPrices) else { return nil }
-        let inputCost = Double(inputTokens) / 1_000_000.0 * prices.input
-        let outputCost = Double(outputTokens) / 1_000_000.0 * prices.output
-        return inputCost + outputCost
+        dynamicPrices: [String: ModelPrice] = [:],
+        customPrice: CustomPrice? = nil
+    ) -> CostEstimate? {
+        guard let prices = pricing(
+            for: model,
+            dynamicPrices: dynamicPrices,
+            customPrice: customPrice
+        ) else { return nil }
+
+        let full = Double(inputTokens) / 1_000_000.0 * prices.input
+            + Double(outputTokens) / 1_000_000.0 * prices.output
+
+        var cached: Double?
+        if let cachedRate = prices.cachedInput, cachedRate >= 0 {
+            cached = Double(inputTokens) / 1_000_000.0 * cachedRate
+                + Double(outputTokens) / 1_000_000.0 * prices.output
+        }
+        return CostEstimate(full: full, cached: cached)
     }
 
     // MARK: - Formatting

@@ -24,6 +24,24 @@ struct MemoryNotice: Identifiable, Equatable {
     }
 }
 
+/// A chat message matching the sidebar full-text search.
+struct MessageSearchResult: Identifiable, Equatable {
+    /// Message id (stable identity for list rows + scroll target).
+    let id: UUID
+
+    /// Session the message belongs to.
+    let sessionID: UUID
+
+    /// Session title shown above the snippet.
+    let sessionTitle: String
+
+    /// The matched message itself.
+    let message: ChatMessage
+
+    /// Short excerpt around the first match.
+    let snippet: String
+}
+
 /// Drives the active chat session: sending messages, consuming the SSE
 /// stream, and accumulating response tokens into the assistant message.
 ///
@@ -69,6 +87,14 @@ final class ChatViewModel: ObservableObject {
 
     /// Dismisses the error banner when set.
     @Published var errorDismissToken = 0
+
+    // MARK: - Full-text search
+
+    /// Sidebar search query (empty = normal session list).
+    @Published var searchQuery = ""
+
+    /// Message id to scroll to + highlight after jumping from a search result.
+    @Published var highlightMessageID: UUID?
 
     // MARK: - Internal stream state
 
@@ -344,17 +370,18 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Sending messages
 
-    /// Sends the user's text (optionally with image attachments) as a message
-    /// and kicks off a streaming reply using Swift Concurrency.
+    /// Sends the user's text (optionally with image / PDF attachments) as a
+    /// message and kicks off a streaming reply using Swift Concurrency.
     func sendMessage(
         _ text: String,
         config: APIServerConfig?,
         model: String,
-        attachments: [ImageAttachment] = []
+        attachments: [ImageAttachment] = [],
+        documents: [DocumentAttachment] = []
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Allow sending when either text or at least one image is present.
-        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
+        // Allow sending when either text or at least one attachment is present.
+        guard !trimmed.isEmpty || !attachments.isEmpty || !documents.isEmpty else { return }
         guard let sessionID = activeSessionID else { return }
         guard let config = config else {
             errorMessage = L("no.active.profile")
@@ -365,8 +392,11 @@ final class ChatViewModel: ObservableObject {
         cancelStreaming()
         clearError()
 
-        // Persist the user message (with any image attachments).
-        sessionStore.appendMessage(.user(trimmed, attachments: attachments), to: sessionID)
+        // Persist the user message (with any attachments).
+        sessionStore.appendMessage(
+            .user(trimmed, attachments: attachments, documents: documents),
+            to: sessionID
+        )
 
         // Build the request history: prepend the editable system prompt,
         // then keep messages with text OR image attachments so pure-image
@@ -379,7 +409,7 @@ final class ChatViewModel: ObservableObject {
         // directly. Using the VM's active session guarantees the history sent
         // matches the chat currently displayed.
         var history = activeSession?.messages
-            .filter { !$0.content.isEmpty || !$0.attachments.isEmpty } ?? []
+            .filter { !$0.content.isEmpty || !$0.attachments.isEmpty || !$0.documentAttachments.isEmpty } ?? []
 
         let systemPrompt = buildSystemPrompt(for: config)
         history.insert(.system(systemPrompt), at: 0)
@@ -432,6 +462,23 @@ final class ChatViewModel: ObservableObject {
             guard let self else { return }
 
             do {
+                // AGENT MODE: built-in tool calling (web_search / calc / time).
+                // A per-profile toggle; normal chats keep the plain `tools`-free
+                // request so relays / cache behavior are completely unchanged.
+                if configForRequest.toolsEnabled {
+                    let stream = try await service.streamChatWithTools(
+                        config: configForRequest,
+                        model: modelForRequest,
+                        messages: history
+                    )
+                    try await self.consumeToolEvents(
+                        stream,
+                        sessionID: sessionID,
+                        renderAsYouGo: configForRequest.streamEnabled
+                    )
+                    return
+                }
+
                 // NON-STREAMING RENDER MODE (transport is still SSE/streamed):
                 // accumulate the whole reply over the SSE stream but do NOT
                 // update the bubble token-by-token. The placeholder stays empty
@@ -566,6 +613,83 @@ final class ChatViewModel: ObservableObject {
     ///
     /// The model may emit the marker at the START, MIDDLE, or END of a reply;
     /// every occurrence is stripped (the parser accepts any location too).
+    /// Consumes a tool-mode `ChatStreamEvent` stream (Agent mode).
+    ///
+    /// Tool activity is written straight into the placeholder assistant
+    /// bubble ("🔧 running web_search…"), then the final answer text streams
+    /// normally. In non-streaming mode (`renderAsYouGo == false`) text is
+    /// rendered once at the end, exactly like the plain chat path.
+    private func consumeToolEvents(
+        _ stream: AsyncThrowingStream<ChatStreamEvent, Error>,
+        sessionID: UUID,
+        renderAsYouGo: Bool
+    ) async throws {
+        var accumulated = ""
+        var lastFlush = ContinuousClock.now
+        var collectedSources: [ChatSource] = []
+
+        for try await event in stream {
+            // If the user switched sessions mid-stream, stop writing.
+            guard activeSessionID == sessionID else {
+                cancelStreaming()
+                return
+            }
+            switch event {
+            case .text(let delta):
+                accumulated += delta
+                if !hasReceivedFirstToken
+                    && !accumulated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    hasReceivedFirstToken = true
+                }
+                // Throttle UI updates to ~100 ms (streaming render only).
+                if renderAsYouGo, lastFlush.duration(to: .now) > .milliseconds(100) {
+                    lastFlush = .now
+                    sessionStore.updateLastAssistantContent(
+                        Self.stripPersonalization(from: accumulated),
+                        in: sessionID
+                    )
+                }
+            case .toolActivity(let toolName):
+                sessionStore.updateLastAssistantContent(
+                    L("agent.tool.running", toolName),
+                    in: sessionID
+                )
+            case .toolFinished(let toolName):
+                if accumulated.isEmpty {
+                    sessionStore.updateLastAssistantContent(
+                        L("agent.tool.done", toolName),
+                        in: sessionID
+                    )
+                }
+            case .sources(let list):
+                collectedSources.append(contentsOf: list)
+            }
+        }
+
+        // Always flush the final accumulated text after the stream ends.
+        sessionStore.updateLastAssistantContent(
+            Self.stripPersonalization(from: accumulated),
+            in: sessionID
+        )
+
+        // Attach web-source references collected during the tool loop.
+        if !collectedSources.isEmpty {
+            sessionStore.updateLastAssistantSources(collectedSources, in: sessionID)
+        }
+
+        // After the full reply arrives, parse & store any new personalization.
+        if let changes = UserProfileStore.parse(from: accumulated) {
+            applyProfileChanges(changes)
+        }
+
+        sessionStore.forcePersist()
+        isStreaming = false
+        streamTask = nil
+        streamingAssistantID = nil
+        hasReceivedFirstToken = false
+    }
+
+
     private static func stripPersonalization(from text: String) -> String {
         var result = text
         while let start = result.range(of: "<!-- PERSONALIZATION:") {
@@ -577,6 +701,67 @@ final class ChatViewModel: ObservableObject {
             result.removeSubrange(start.lowerBound..<end.upperBound)
         }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Full-text search
+
+    /// Case-insensitive search across all session titles + message contents.
+    /// Returns results ordered by session recency, then by message order.
+    var searchResults: [MessageSearchResult] {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+
+        var results: [MessageSearchResult] = []
+        for session in sessions {
+            for message in session.messages where message.role == .user || message.role == .assistant {
+                guard message.content.range(of: query, options: [.caseInsensitive]) != nil else {
+                    continue
+                }
+                results.append(MessageSearchResult(
+                    id: message.id,
+                    sessionID: session.id,
+                    sessionTitle: session.title,
+                    message: message,
+                    snippet: Self.searchSnippet(for: message.content, query: query)
+                ))
+            }
+        }
+        return results
+    }
+
+    /// Jumps to the message containing a search hit and highlights it briefly.
+    func selectSearchResult(_ result: MessageSearchResult) {
+        selectSession(id: result.sessionID)
+        highlightMessageID = result.id
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.5))
+            if highlightMessageID == result.id {
+                highlightMessageID = nil
+            }
+        }
+    }
+
+    /// Clears the sidebar search query.
+    func clearSearch() {
+        searchQuery = ""
+        highlightMessageID = nil
+    }
+
+    /// Builds a short excerpt around the first match of `query` in `content`.
+    private static func searchSnippet(for content: String, query: String) -> String {
+        let flat = content
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        guard let range = flat.range(of: query, options: [.caseInsensitive]) else {
+            return String(flat.prefix(90))
+        }
+        let start = flat.index(range.lowerBound, offsetBy: -35, limitedBy: flat.startIndex)
+            ?? flat.startIndex
+        let end = flat.index(range.upperBound, offsetBy: 70, limitedBy: flat.endIndex)
+            ?? flat.endIndex
+        var text = String(flat[start..<end])
+        text = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return (start > flat.startIndex ? "…" : "") + text + (end < flat.endIndex ? "…" : "")
     }
 
     /// Stops the in-flight stream and saves partial content.

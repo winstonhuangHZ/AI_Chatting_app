@@ -121,6 +121,17 @@ final class SessionStore: ObservableObject {
         sessions[sessionIndex].messages[msgIndex].content = content
     }
 
+    /// Attaches source references to the last assistant message in a session
+    /// (web tools' URLs rendered as the "Sources" card under the reply).
+    func updateLastAssistantSources(_ sources: [ChatSource], in sessionID: UUID) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let msgIndex = sessions[sessionIndex].messages.indices.last,
+              sessions[sessionIndex].messages[msgIndex].role == .assistant else {
+            return
+        }
+        sessions[sessionIndex].messages[msgIndex].sources = sources
+    }
+
     /// Deletes a single message (by id) from the given session.
     func deleteMessage(_ message: ChatMessage, in sessionID: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
