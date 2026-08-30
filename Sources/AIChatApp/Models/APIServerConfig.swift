@@ -5,7 +5,9 @@ import Foundation
 /// Many OpenAI-compatible relays (one-api / new-api / OpenRouter format)
 /// include a `pricing` object on each model entry in `GET /v1/models`:
 ///   {"id":"gpt-4o-mini","pricing":{"prompt":0.15,"completion":0.6}}
-/// Units are USD per 1M tokens.
+/// OpenRouter-style relays additionally report `prompt_cache_read`, the
+/// per-token price for input served from the prompt cache (DeepSeek exposes
+/// the same cache-hit economics). Units are USD per 1M tokens.
 struct ModelPrice: Codable, Hashable {
     /// USD per 1M input (prompt) tokens.
     var prompt: Double
@@ -13,7 +15,17 @@ struct ModelPrice: Codable, Hashable {
     /// USD per 1M output (completion) tokens.
     var completion: Double
 
-    /// Whether both prices are non-negative (sane).
+    /// USD per 1M cached-input tokens (`prompt_cache_read`); nil when the
+    /// relay does not expose a cached rate.
+    var cachedInput: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case prompt
+        case completion
+        case cachedInput = "prompt_cache_read"
+    }
+
+    /// Whether the required prices are non-negative (sane).
     var isValid: Bool {
         prompt >= 0 && completion >= 0
     }

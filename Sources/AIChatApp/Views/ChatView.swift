@@ -854,7 +854,7 @@ private struct UsageBarView: View {
     /// 界面本地化——语言切换时即时刷新。
     @EnvironmentObject private var localization: LocalizationManager
 
-    private var summary: (input: Int, output: Int) {
+    private var summary: (input: Int, output: Int, freshInput: Int) {
         TokenUsage.summarize(messages, systemPrompt: systemPrompt, profileJSON: profileJSON)
     }
 
@@ -863,6 +863,7 @@ private struct UsageBarView: View {
             model: model,
             inputTokens: summary.input,
             outputTokens: summary.output,
+            freshTokens: summary.freshInput,
             dynamicPrices: dynamicPrices,
             customPrice: customPrice
         )
@@ -896,9 +897,18 @@ private struct UsageBarView: View {
             if let estimate = costEstimate {
                 Text("≈ \(TokenUsage.formatCost(estimate.full))")
                     .font(.caption).foregroundStyle(.secondary)
-                if let cached = estimate.cached, cached < estimate.full {
+                    .help(L("usage.cost.full"))
+                // Realistic estimate: the repeatedly re-sent context (history
+                // prefix) hits the cache at the cached-input rate; only the
+                // newest user message is billed at the full input rate.
+                if let blended = estimate.blended, blended < estimate.full {
+                    Text(L("usage.cost.cached", TokenUsage.formatCost(blended)))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .help(L("usage.cost.cached.help"))
+                } else if let cached = estimate.cached, cached < estimate.full {
                     Text(L("usage.cost.cached", TokenUsage.formatCost(cached)))
                         .font(.caption).foregroundStyle(.secondary)
+                        .help(L("usage.cost.cached.help"))
                 }
             }
 
