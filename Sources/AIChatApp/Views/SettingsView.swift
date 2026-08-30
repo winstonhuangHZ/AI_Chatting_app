@@ -399,6 +399,7 @@ private struct ProfileEditView: View {
                                 Text(MultimodalSupport.displayName(model)).tag(model)
                             }
                         }
+                        .tint(appearanceStore.accentColor)
                         .disabled(draft.availableModels.isEmpty)
 
                         Label(L("multimodal.hint"),

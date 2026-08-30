@@ -7,6 +7,8 @@ struct LanguagePickerView: View {
 
     @EnvironmentObject private var localization: LocalizationManager
 
+    @EnvironmentObject private var appearance: AppearanceStore
+
     // MARK: - Body
 
     var body: some View {
@@ -22,6 +24,7 @@ struct LanguagePickerView: View {
             }
             .pickerStyle(.menu)
             .frame(maxWidth: 280)
+            .tint(appearance.accentColor)
 
             Text(L("language.hint"))
                 .font(.caption)

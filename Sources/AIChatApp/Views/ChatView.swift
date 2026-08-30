@@ -207,6 +207,7 @@ private struct TopBarView: View {
             }
             .pickerStyle(.menu)
             .frame(minWidth: 160)
+            .tint(appearance.accentColor)
 
             // Model picker (populated from the active profile).
             // Multimodal models are marked with 🖼 on the right.
@@ -221,6 +222,7 @@ private struct TopBarView: View {
                 }
                 .pickerStyle(.menu)
                 .frame(minWidth: 200)
+                .tint(appearance.accentColor)
             }
 
             Spacer()
@@ -233,6 +235,7 @@ private struct TopBarView: View {
                     .toggleStyle(.switch)
                     .controlSize(.mini)
                     .font(appearance.fontPreset.font(size: appearance.pointSize - 1))
+                    .tint(appearance.accentColor)
                     .help(L("agent.mode.help"))
             }
 
