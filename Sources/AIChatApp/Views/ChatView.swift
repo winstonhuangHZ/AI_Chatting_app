@@ -100,7 +100,28 @@ struct ChatView: View {
                 }
             }
         }
+        // Cache-reset toast: shown when the shared profile changed since the
+        // last request (its message sits in the byte-identical cache prefix, so
+        // the whole history cache is reset). Auto-dismisses after 4s.
+        .overlay(alignment: .bottom) {
+            if let notice = chatViewModel.cacheResetNotice {
+                CacheResetBanner {
+                    chatViewModel.cacheResetNotice = nil
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .padding(.horizontal, 12)
+                .padding(.bottom, 128)
+                .id(notice.id)
+                .task(id: notice.id) {
+                    try? await Task.sleep(for: .seconds(4))
+                    if chatViewModel.cacheResetNotice?.id == notice.id {
+                        chatViewModel.cacheResetNotice = nil
+                    }
+                }
+            }
+        }
         .animation(.default, value: chatViewModel.memoryNotice)
+        .animation(.default, value: chatViewModel.cacheResetNotice)
         // Error banner.
         .overlay(alignment: .top) {
             if let error = chatViewModel.errorMessage {
@@ -174,6 +195,42 @@ private struct MemoryNoticeBanner: View {
         L("memory.removed") + " (\(n))"
     }
 }
+
+/// Small transient toast shown when the shared profile changed since the last
+/// request, resetting the relay's cache prefix for the whole history.
+private struct CacheResetBanner: View {
+
+    /// Dismiss action.
+    let onDismiss: () -> Void
+
+    @EnvironmentObject private var localization: LocalizationManager
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.clockwise")
+                .foregroundStyle(.tint)
+            Text(L("cache.reset.profile"))
+                .font(.callout)
+                .lineLimit(3)
+            Spacer(minLength: 0)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.accentColor.opacity(0.25), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+    }
+}
+
+
 
 // MARK: - Top configuration bar
 

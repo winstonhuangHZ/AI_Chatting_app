@@ -24,6 +24,12 @@ struct MemoryNotice: Identifiable, Equatable {
     }
 }
 
+    /// Transient banner explaining a cache reset caused by a profile change.
+    struct CacheResetNotice: Identifiable, Equatable {
+        let id: UUID
+        init(id: UUID = UUID()) { self.id = id }
+    }
+
 /// A chat message matching the sidebar full-text search.
 struct MessageSearchResult: Identifiable, Equatable {
     /// Message id (stable identity for list rows + scroll target).
@@ -81,6 +87,13 @@ final class ChatViewModel: ObservableObject {
 
     /// User-facing toast when the model added/updated/removed memories.
     @Published var memoryNotice: MemoryNotice?
+
+    /// User-facing toast when the shared profile changed since the last
+    /// request — the relay's cache prefix is therefore reset for this history.
+    @Published var cacheResetNotice: CacheResetNotice?
+
+    /// Fingerprint of the profile payload the previous request was built with.
+    private var lastProfilePayloadHash: String?
 
     /// User-facing error banner text (nil hides the banner).
     @Published var errorMessage: String?
@@ -140,6 +153,22 @@ final class ChatViewModel: ObservableObject {
             removedCount: removed,
             timestamp: Date()
         )
+    }
+
+    /// Detects whether the shared profile changed since the previous request.
+    ///
+    /// The profile message sits at index 1 of the byte-identical cache prefix,
+    /// so a profile change resets the relay's cache for the WHOLE conversation
+    /// history (hit rate collapses to just the system prompt). We surface that
+    /// as a banner instead of letting the drop look like a random bug. The
+    /// change was applied when the previous reply finished; it only becomes
+    /// visible when the next request is being built.
+    private func trackProfileChange() {
+        let hash = userProfileStore.payloadHash
+        if let last = lastProfilePayloadHash, last != hash {
+            cacheResetNotice = CacheResetNotice()
+        }
+        lastProfilePayloadHash = hash
     }
 
     // MARK: - Convenience
@@ -315,6 +344,9 @@ final class ChatViewModel: ObservableObject {
         sessionStore.deleteMessage(message, in: sessionID)
         clearError()
 
+        // 若共享 profile 自上次请求后变化，缓存前缀将重置 —— 先记录以便提示。
+        trackProfileChange()
+
         // 构建历史：删除后的会话全部消息（应以上一条 user 消息结尾）+
         // system prompt。使用 `activeSession`（VM 单一数据源）。
         //
@@ -385,6 +417,9 @@ final class ChatViewModel: ObservableObject {
             .user(trimmed, attachments: attachments, documents: documents),
             to: sessionID
         )
+
+        // 若共享 profile 自上次请求后变化，缓存前缀将重置 —— 先记录以便提示。
+        trackProfileChange()
 
         // Build the request history: prepend the editable system prompt,
         // then keep messages with text OR image attachments so pure-image
