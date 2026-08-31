@@ -99,6 +99,11 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     /// model is aware of "now" (time of day / day of week / date).
     var includeTimestamp: Bool
 
+    /// Opt-in: expose the `compile_latex` tool (Agent mode) so the model can
+    /// write a .tex file and compile it to PDF with the LOCAL TeX install.
+    /// Also requires a detected toolchain — see `LaTeXService.isAvailable`.
+    var latexEnabled: Bool
+
     /// Whether replies stream token-by-token (true) or return as a single
     /// response (false). Toggleable per profile.
     ///
@@ -165,6 +170,7 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         systemPrompt: String = APIServerConfig.defaultSystemPrompt,
         streamEnabled: Bool = true,
         includeTimestamp: Bool = false,
+        latexEnabled: Bool = false,
         toolsEnabled: Bool = false,
         customPrice: CustomPrice? = nil
     ) {
@@ -178,6 +184,7 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         self.systemPrompt = systemPrompt
         self.streamEnabled = streamEnabled
         self.includeTimestamp = includeTimestamp
+        self.latexEnabled = latexEnabled
         self.toolsEnabled = toolsEnabled
         self.customPrice = customPrice
     }
@@ -208,6 +215,7 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         // Cache-optimization: timestamps break DeepSeek's byte-identical prefix
         // matching (hit rate collapses to ~5%), so they default OFF.
         includeTimestamp = try container.decodeIfPresent(Bool.self, forKey: .includeTimestamp) ?? false
+        latexEnabled = try container.decodeIfPresent(Bool.self, forKey: .latexEnabled) ?? false
         toolsEnabled = try container.decodeIfPresent(Bool.self, forKey: .toolsEnabled) ?? false
         customPrice = try container.decodeIfPresent(CustomPrice.self, forKey: .customPrice)
     }

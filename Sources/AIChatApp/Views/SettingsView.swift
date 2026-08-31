@@ -356,6 +356,14 @@ private struct ProfileEditView: View {
                         .help(L("timestamp.warning"))
 
                     Toggle(L("agent.mode"), isOn: $draft.toolsEnabled)
+
+                    Toggle(L("latex.on"), isOn: $draft.latexEnabled)
+                        .disabled(!LaTeXService.isAvailable)
+                        .help(
+                            LaTeXService.isAvailable
+                                ? L("latex.help", LaTeXService.installedEngineList)
+                                : L("latex.not.installed")
+                        )
                 } header: {
                     Text(L("generation"))
                 } footer: {

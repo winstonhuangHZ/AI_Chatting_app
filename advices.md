@@ -39,6 +39,7 @@
 | 思考过程折叠 | — | ✅ **已实现**：DeepSeek `reasoning_content` 抓取并持久化（工具轮回传是 API 硬要求），气泡内「💭 思考过程」默认折叠 |
 | 导出会话为 PDF | ~~第三方 md→pdf 库~~ | ✅ **已实现**：`ImageRenderer` + `CGPDFContext` 把 `MarkdownText` 真实视图树画进 PDF，**复用高亮/公式/表格**且文字为矢量可搜索；零依赖。局限见下 |
 | Mermaid 流程图 | 复用 `MathSegmenter` 的 provider 管线思路 | ` ```mermaid ` 块走 WKWebView 快照，架构与数学渲染同构 |
+| LaTeX 编译为 PDF | — | ✅ **已实现（可选开关）**：Agent 模式新工具 `compile_latex`。双重门槛 = profile 开关 + 本机 TeX 工具链（探测 `/Library/TeX/texbin` 等，xelatex/pdflatex/lualatex），缺任一则工具不注册（模型看不到）且设置开关置灰。产物存 `~/Documents/AIChatApp/LaTeX/<name>-<时间戳>/`，工具结果里带 `ARTIFACT: file://` 行 → 聊天里渲染成可点击 PDF 卡片。安全边界：模型只能给文件名主干，写不出输出目录 |
 | 朗读回复（TTS） | 零依赖：系统 `AVSpeechSynthesizer` | 助手消息加 🔈 按钮，中文用 `zh-CN` voice |
 | 语音输入（STT） | [`WhisperKit`](https://github.com/argmaxinc/WhisperKit) | Apple Silicon 原生优化；可先用系统听写 API 过渡 |
 | API Key 安全 | [`kishikawakatsumi/KeychainAccess`](https://github.com/kishikawakatsumi/KeychainAccess) | ⚠️ **仍是明文**：`~/Library/Preferences/com.aichat.app.plist` 里可直接读出 key，Keychain 是安全底线 |

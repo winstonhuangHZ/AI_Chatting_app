@@ -442,7 +442,9 @@ final class ChatViewModel: ObservableObject {
                 // "timestamp" toggle is on (cache-safe: tool results are never
                 // persisted, so the request prefix stays byte-identical).
                 if configForRequest.toolsEnabled || configForRequest.includeTimestamp {
-                    let toolSet: [BuiltinTool]? = configForRequest.toolsEnabled ? nil : [ChatTools.getTime]
+                    let toolSet: [BuiltinTool]? = configForRequest.toolsEnabled
+                        ? ChatTools.set(latexEnabled: configForRequest.latexEnabled)
+                        : [ChatTools.getTime]
                     let stream = try await service.streamChatWithTools(
                         config: configForRequest,
                         model: modelForRequest,

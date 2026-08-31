@@ -556,7 +556,7 @@ private struct MessageBubble: View {
             ForEach(message.sources) { source in
                 Link(destination: Self.sourceURL(source.url)) {
                     HStack(spacing: 6) {
-                        Image(systemName: "link")
+                        Image(systemName: source.url.hasPrefix("file://") ? "doc" : "link")
                             .font(.system(size: 10))
                             .foregroundStyle(appearance.accentColor)
                         Text(source.title.isEmpty ? source.url : source.title)
@@ -584,7 +584,11 @@ private struct MessageBubble: View {
     }
 
     private static func sourceURL(_ string: String) -> URL {
-        URL(string: string) ?? URL(string: "https://")!
+        // Produced files come through as file:// URLs (compile_latex etc.).
+        if string.hasPrefix("file://") {
+            return URL(string: string) ?? URL(string: "https://")!
+        }
+        return URL(string: string) ?? URL(string: "https://")!
     }
 
     // MARK: - Quick action bar (below assistant messages)

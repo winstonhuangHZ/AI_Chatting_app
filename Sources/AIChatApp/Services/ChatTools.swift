@@ -41,8 +41,93 @@ struct BuiltinTool {
 /// Registry + execution for the built-in tools offered to the model.
 enum ChatTools {
 
-    /// The full tool set sent on every agent-mode (tool-enabled) request.
+    /// The base tool set sent on every agent-mode (tool-enabled) request.
     static let all: [BuiltinTool] = [getTime, calc, webSearch, webFetch, weather]
+
+    /// The tool set for one request.
+    ///
+    /// `compile_latex` is opt-in **and** environment-gated: the profile toggle
+    /// must be on AND a TeX engine must exist. When either is false the tool is
+    /// not registered at all, so the model never offers a capability the machine
+    /// cannot honour.
+    static func set(latexEnabled: Bool) -> [BuiltinTool] {
+        var tools = all
+        if latexEnabled && LaTeXService.isAvailable {
+            tools.append(compileLaTeX)
+        }
+        return tools
+    }
+
+    // MARK: - compile_latex
+
+    /// Writes a `.tex` document and compiles it to PDF with the local toolchain.
+    ///
+    /// Returns the produced paths (as a `file://` URL the UI turns into a
+    /// clickable card) or the condensed engine errors so the model can fix its
+    /// own source and retry.
+    static let compileLaTeX = BuiltinTool(
+        name: "compile_latex",
+        description: """
+        Write a LaTeX document to a file and compile it to PDF using the local \
+        TeX installation (available engines: \(LaTeXService.installedEngineList)). \
+        Pass the COMPLETE document including \\documentclass and \
+        \\begin{document}…\\end{document}. Prefer xelatex for Chinese text (use \
+        \\usepackage{ctex}). On failure you get the compiler errors — fix the \
+        source and call the tool again. Use this when the user asks for a PDF, \
+        a paper, a typeset document, or a printable file.
+        """,
+        parameters: [
+            "type": "object",
+            "properties": [
+                "source": [
+                    "type": "string",
+                    "description": "The complete LaTeX document source.",
+                ],
+                "filename": [
+                    "type": "string",
+                    "description": "Base filename without extension, e.g. \"report\". Letters, digits, - and _ only.",
+                ],
+                "engine": [
+                    "type": "string",
+                    "description": "Optional engine: xelatex (default, best for CJK), pdflatex or lualatex.",
+                ],
+            ],
+            "required": ["source"],
+        ],
+        extractSources: { result in LaTeXService.parseArtifacts(from: result) }
+    ) { arguments in
+        guard let source = arguments["source"] as? String,
+              !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "Error: missing \"source\" argument."
+        }
+        let stem = (arguments["filename"] as? String) ?? "document"
+        let engine = arguments["engine"] as? String
+
+        let result: LaTeXService.CompileResult
+        do {
+            result = try LaTeXService.compile(source: source, filenameStem: stem, engine: engine)
+        } catch {
+            return "Error: LaTeX compilation could not start — \(error.localizedDescription)"
+        }
+
+        if let pdf = result.pdfURL {
+            let pages = result.pageCount.map { " (\($0) pages)" } ?? ""
+            return """
+            Compiled successfully\(pages).
+            PDF: \(pdf.path)
+            Source: \(result.sourceURL.path)
+            ARTIFACT: \(pdf.absoluteString)
+            Tell the user the PDF is ready; the app shows a clickable link. Do NOT paste the whole source again.
+            """
+        }
+
+        return """
+        Compilation FAILED. The .tex was saved at \(result.sourceURL.path).
+        Compiler errors:
+        \(result.log)
+        Fix the source and call compile_latex again.
+        """
+    }
 
     // MARK: - get_time
 
