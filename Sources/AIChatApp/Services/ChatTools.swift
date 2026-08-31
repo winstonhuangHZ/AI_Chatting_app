@@ -44,6 +44,19 @@ enum ChatTools {
     /// The base tool set sent on every agent-mode (tool-enabled) request.
     static let all: [BuiltinTool] = [getTime, calc, webSearch, webFetch, weather]
 
+    /// The full lookup registry: `all` plus the environment-gated
+    /// `compile_latex` when a TeX toolchain exists. Used by `execute` /
+    /// `sources` so a tool the model was ALLOWED to call (i.e. it was
+    /// registered in the request) is also resolvable locally — otherwise the
+    /// executor would reply "unknown tool" to a perfectly valid call.
+    static var allWithOptional: [BuiltinTool] {
+        var tools = all
+        if LaTeXService.isAvailable {
+            tools.append(compileLaTeX)
+        }
+        return tools
+    }
+
     /// The tool set for one request.
     ///
     /// `compile_latex` is opt-in **and** environment-gated: the profile toggle
@@ -155,7 +168,7 @@ enum ChatTools {
     /// Executes a tool by name. Unknown tools / failures return a plain-text
     /// error string the model can read and adjust to.
     static func execute(name: String, argumentsJSON: String) async throws -> String {
-        guard let tool = all.first(where: { $0.name == name }) else {
+        guard let tool = allWithOptional.first(where: { $0.name == name }) else {
             return "Error: unknown tool \"\(name)\"."
         }
         var arguments: [String: Any] = [:]
@@ -169,7 +182,7 @@ enum ChatTools {
     /// Returns the source references (title + URL) a tool attached to its result,
     /// for the "Sources" card under the final assistant message.
     static func sources(for name: String, result: String) -> [ChatSource] {
-        guard let tool = all.first(where: { $0.name == name }) else { return [] }
+        guard let tool = allWithOptional.first(where: { $0.name == name }) else { return [] }
         return tool.extractSources(result)
     }
 
