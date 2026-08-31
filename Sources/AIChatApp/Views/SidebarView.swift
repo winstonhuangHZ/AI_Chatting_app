@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Left sidebar: list of chat sessions with a "New Chat" button and
 /// per-item delete support (modern macOS 14+ List with selection).
@@ -137,6 +138,15 @@ struct SidebarView: View {
                         onSelect: { chatViewModel.selectSession(id: session.id) }
                     )
                     .contextMenu {
+                        Button {
+                            exportPDF(session)
+                        } label: {
+                            Label(L("export.pdf"), systemImage: "arrow.down.doc")
+                        }
+                        .disabled(session.messages.isEmpty)
+
+                        Divider()
+
                         Button(L("delete.chat"), role: .destructive) {
                             chatViewModel.deleteSession(session)
                         }
@@ -145,6 +155,24 @@ struct SidebarView: View {
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
+        }
+    }
+
+    // MARK: - PDF export
+
+    /// Exports one session to PDF, surfacing failures in the chat error banner.
+    private func exportPDF(_ session: ChatSession) {
+        do {
+            if let url = try PDFExportService.export(
+                session: session,
+                appearance: appearance,
+                localization: localization
+            ) {
+                // Reveal the file so the user gets immediate confirmation.
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+        } catch {
+            chatViewModel.errorMessage = error.localizedDescription
         }
     }
 }

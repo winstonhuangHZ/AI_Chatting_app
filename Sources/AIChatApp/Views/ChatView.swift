@@ -395,6 +395,9 @@ private struct MessageBubble: View {
     /// `true` while the generation-metadata popover is open.
     @State private var showDetail = false
 
+    /// `true` while the DeepSeek "thinking" section is expanded.
+    @State private var showReasoning = false
+
     // MARK: - Environment
 
     @EnvironmentObject private var appearance: AppearanceStore
@@ -443,6 +446,13 @@ private struct MessageBubble: View {
                 // Document (PDF) attachments preview (user messages).
                 if !message.documentAttachments.isEmpty {
                     documentGrid
+                }
+
+                // Collapsed "thinking" section (DeepSeek reasoning models).
+                if message.role == .assistant,
+                   let reasoning = message.reasoningContent,
+                   !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    reasoningSection(reasoning)
                 }
 
                 if !contentDisplay.isEmpty {
@@ -669,6 +679,63 @@ private struct MessageBubble: View {
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
     }
+
+    // MARK: - Reasoning ("thinking") section
+
+    /// Collapsible view of a reasoning model's thinking text.
+    ///
+    /// The text is persisted on the message (and passed back to the API on tool
+    /// rounds, which DeepSeek requires) — this just surfaces it, collapsed by
+    /// default so it never competes with the answer.
+    @ViewBuilder
+    private func reasoningSection(_ reasoning: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.smooth(duration: 0.22)) {
+                    showReasoning.toggle()
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: showReasoning ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text("💭 \(L("reasoning.title"))")
+                        .font(.caption)
+                    Text(L("reasoning.chars", reasoning.count))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(L("reasoning.help"))
+
+            if showReasoning {
+                Text(reasoning)
+                    .appearanceFont(appearance.fontPreset, size: max(appearance.pointSize - 1.5, 10))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.secondary.opacity(0.07))
+                    )
+                    .overlay(alignment: .leading) {
+                        // Left rule marks it as "meta" content, not the answer.
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(appearance.accentColor.opacity(0.45))
+                            .frame(width: 3)
+                    }
+                    .frame(maxWidth: 620, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.bottom, 2)
+    }
+
 
     // MARK: - Derived
 
