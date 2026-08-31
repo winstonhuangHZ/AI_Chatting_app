@@ -1,11 +1,10 @@
 import SwiftUI
 
-/// 界面外观设置：字号分级（小/中/大/特大）。
+/// 界面外观设置：主题（跟随系统 / Claude 米白橙）、字体预设（serif/sans/mono）、
+/// 字号分级（小/中/大/特大）。
 ///
-/// 字体预设（serif/sans/mono）相关代码已保留（见 `AppearanceStore.fontPreset` 与
-/// MARK: TODO 注释），但因 swift-markdown-ui 对中文 serif 映射不理想，
-/// 暂不在界面开放字体预设选择（`isFontPresetSelectionEnabled = false`），
-/// 统一使用默认 sans 保证界面一致；字号分级正常开放。
+/// 字体预设已开放：serif 采用 `.system(.serif)`，系统自动为中文选宋体（Songti SC）；
+/// 选择即时生效并持久化（`AppearanceStore.fontPreset`）。
 struct AppearancePickerView: View {
 
     // MARK: - Environment

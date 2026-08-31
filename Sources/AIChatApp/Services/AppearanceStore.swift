@@ -175,10 +175,9 @@ final class AppearanceStore: ObservableObject {
 
     /// 当前字体预设。
     ///
-    /// > TODO: Markdown 渲染引擎（swift-markdown-ui）对中文 serif 映射不理想
-    /// > （custom 字体族只影响拉丁文字）。后续可尝试自定义 Theme 或替换渲染器。
-    /// > 目前 UI 暂不开放选择（`isFontPresetSelectionEnabled = false`），
-    /// > 默认使用 `.sans` 保证界面一致；相关代码全部保留，仅隐藏入口。
+    /// serif 采用 `.system(.serif)` 而非 `.custom(...)`：custom 只映射拉丁字体，
+    /// system serif 会让系统自动为中文选择宋体（Songti SC）。设置界面已开放
+    /// 选择（`isFontPresetSelectionEnabled = true`），切换后全局即时生效并持久化。
     @Published var fontPreset: FontPreset {
         didSet { persist() }
     }
@@ -297,8 +296,9 @@ final class AppearanceStore: ObservableObject {
 
     /// 是否在设置界面开放字体预设选择。
     ///
-    /// 当前为 `false`（隐藏入口，默认 sans）。实现 serif 中文映射后可改为 `true`。
-    var isFontPresetSelectionEnabled = false
+    /// 已开放：serif 采用 `.system(.serif)`（见 `fontPropertiesFamily`），系统会
+    /// 自动为中文选择宋体（Songti SC），Markdown 与全局 UI 即时生效并持久化。
+    var isFontPresetSelectionEnabled = true
 
     // MARK: - Persistence
 
