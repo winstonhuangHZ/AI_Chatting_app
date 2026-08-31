@@ -1159,7 +1159,6 @@ private struct InputBarView: View {
     @State private var draft = ""
     @State private var pendingAttachments: [ImageAttachment] = []
     @State private var pendingDocuments: [DocumentAttachment] = []
-    @FocusState private var isFocused: Bool
 
     /// 支持直接拖入的图片扩展名（与上传按钮一致）。
     private static let imageExtensions: Set<String> =
@@ -1208,21 +1207,21 @@ private struct InputBarView: View {
                 .buttonStyle(.borderless)
                 .help(L("attach.pdf"))
 
-                TextEditor(text: $draft)
-                    .font(appearance.fontPreset.font(size: appearance.pointSize))
-                    .frame(minHeight: 40, maxHeight: 120)
-                    .focused($isFocused)
-                    .scrollContentBackground(.hidden)
-                    .background(Color(nsColor: .textBackgroundColor))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-                    }
-                    .onSubmit {
-                        // Enter alone sends; Shift+Enter produces a newline
-                        // natively in TextEditor and does NOT trigger onSubmit.
-                        onSubmit()
-                    }
+                // 输入框：NSTextView 包装，支持 Cmd+V 粘贴剪贴板图片、
+                // 拖拽文件到输入框，Enter 发送 / Shift+Enter 换行。
+                PasteImageEditor(
+                    text: $draft,
+                    font: appearance.fontPreset.nsFont(size: appearance.pointSize),
+                    onPasteImage: { data, mime in addPastedImage(data, mime: mime) },
+                    onDroppedFiles: { urls in handleDropped(urls) },
+                    onEnter: { onSubmit() }
+                )
+                .frame(minHeight: 40, maxHeight: 120)
+                .background(Color(nsColor: .textBackgroundColor))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                }
 
                 Button {
                     onSubmit()
@@ -1290,6 +1289,19 @@ private struct InputBarView: View {
                 addPDF(from: url)
             }
         }
+    }
+
+    /// 剪贴板粘贴的图片进入待发送列表（与按钮/拖拽同一条 10MB 上限）。
+    private func addPastedImage(_ data: Data, mime: String) {
+        guard !data.isEmpty, data.count <= 10 * 1024 * 1024 else { return } // cap 10MB
+        let ext = mime == "image/png" ? "png" : "tif"
+        pendingAttachments.append(
+            ImageAttachment(
+                filename: "Pasted Image.\(ext)",
+                mimeType: mime,
+                base64Data: data.base64EncodedString()
+            )
+        )
     }
 
     private func addImage(from url: URL) {
@@ -1366,6 +1378,167 @@ private struct InputBarView: View {
 
         for url in panel.urls {
             addPDF(from: url)
+        }
+    }
+}
+
+// MARK: - 粘贴图片 / 拖拽文件编辑器
+
+/// `NSTextView` 包装的输入编辑器：在保留 Enter 发送 / Shift+Enter 换行的
+/// 基础上，支持 Cmd+V 粘贴剪贴板图片（png/tiff/Finder 图片文件）为附件，
+/// 以及把文件直接拖进输入框（走同一套 handleDropped 逻辑）。
+private struct PasteImageEditor: NSViewRepresentable {
+    @Binding var text: String
+    let font: NSFont
+    let onPasteImage: (Data, String) -> Void
+    let onDroppedFiles: ([URL]) -> Void
+    let onEnter: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+
+        let textView = EditorTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 60))
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.font = font
+        textView.textContainerInset = NSSize(width: 4, height: 6)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        textView.drawsBackground = false
+        textView.delegate = context.coordinator
+        textView.onPasteImage = onPasteImage
+        textView.onDroppedFiles = onDroppedFiles
+        textView.onEnter = onEnter
+        textView.registerForDraggedTypes([.fileURL])
+
+        scrollView.documentView = textView
+
+        // 首次挂载后（window 已存在）自动聚焦输入框。
+        DispatchQueue.main.async {
+            textView.window?.makeFirstResponder(textView)
+        }
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        let textView = nsView.documentView as! EditorTextView
+
+        if textView.string != text {
+            let hadText = !textView.string.isEmpty
+            textView.string = text
+            // 发送后草稿清空：把焦点还给输入框。
+            if hadText && text.isEmpty {
+                nsView.window?.makeFirstResponder(textView)
+            }
+        }
+        if textView.font != font {
+            textView.font = font
+        }
+        textView.onPasteImage = onPasteImage
+        textView.onDroppedFiles = onDroppedFiles
+        textView.onEnter = onEnter
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: PasteImageEditor
+        init(_ parent: PasteImageEditor) { self.parent = parent }
+
+        func textDidChange(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView,
+                  tv.string != parent.text else { return }
+            parent.text = tv.string
+        }
+    }
+}
+
+/// `NSTextView` 子类：拦截粘贴（剪贴板图片 → 附件）、拖拽文件（图片/PDF →
+/// 附件）、Enter 发送 / Shift+Enter 换行。
+private final class EditorTextView: NSTextView {
+    var onPasteImage: ((Data, String) -> Void)?
+    var onDroppedFiles: (([URL]) -> Void)?
+    var onEnter: (() -> Void)?
+
+    // MARK: - Cmd+V 粘贴图片
+
+    override func paste(_ sender: Any?) {
+        if let (data, mime) = Self.clipboardImage() {
+            onPasteImage?(data, mime)
+            return
+        }
+        // 剪贴板没有图片时走默认粘贴（文本粘贴完全不受影响）。
+        super.paste(sender)
+    }
+
+    /// 从通用剪贴板提取图片：优先 png/tiff 数据，其次 Finder 复制的图片
+    /// 文件 URL（读文件内容）。返回 `(数据, MIME)`。
+    static func clipboardImage() -> (Data, String)? {
+        let pb = NSPasteboard.general
+        if let data = pb.data(forType: .png) {
+            return (data, "image/png")
+        }
+        if let data = pb.data(forType: .tiff) {
+            return (data, "image/tiff")
+        }
+        if let urlString = pb.string(forType: .fileURL),
+           let url = URL(string: urlString),
+           let uti = UTType(filenameExtension: url.pathExtension),
+           uti.conforms(to: .image),
+           let data = try? Data(contentsOf: url) {
+            return (data, uti.preferredMIMEType ?? "image/png")
+        }
+        return nil
+    }
+
+    // MARK: - Enter 发送 / Shift+Enter 换行
+
+    override func insertNewline(_ sender: Any?) {
+        let shiftHeld = NSApp.currentEvent?.modifierFlags.contains(.shift) == true
+        if shiftHeld {
+            super.insertNewline(sender) // Shift+Enter：换行
+        } else {
+            onEnter?() // Enter：发送
+        }
+    }
+
+    // MARK: - 拖拽文件到输入框
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        hasUsableFiles(sender) ? .copy : []
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        hasUsableFiles(sender) ? .copy : []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = sender.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []
+        guard !urls.isEmpty else { return false }
+        onDroppedFiles?(urls)
+        return true
+    }
+
+    private func hasUsableFiles(_ sender: NSDraggingInfo) -> Bool {
+        let urls = sender.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []
+        return urls.contains { url in
+            let ext = url.pathExtension.lowercased()
+            return ext == "pdf"
+                || ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff"].contains(ext)
         }
     }
 }

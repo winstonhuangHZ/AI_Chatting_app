@@ -36,7 +36,7 @@ struct AppearancePickerView: View {
             .frame(maxWidth: 280)
             .tint(appearance.accentColor)
 
-            // 字体预设选择暂隐藏（保留代码，见 AppearanceStore TODO 注释）。
+            // 字体预设选择（serif/sans/mono）。
             if appearance.isFontPresetSelectionEnabled {
                 Picker(L("appearance.font"), selection: $appearance.fontPreset) {
                     ForEach(FontPreset.allCases) { preset in
@@ -46,6 +46,7 @@ struct AppearancePickerView: View {
                 }
                 .pickerStyle(.menu)
                 .frame(maxWidth: 280)
+                .tint(appearance.accentColor)
             }
 
             // 导入衬线字体：覆盖系统 serif（New York + 宋体级联），
@@ -55,6 +56,7 @@ struct AppearancePickerView: View {
                     showFontImporter = true
                 }
                 .buttonStyle(.bordered)
+                .tint(appearance.accentColor)
 
                 if let family = ImportedFontManager.shared.familyName {
                     Text("✓ \(family)")

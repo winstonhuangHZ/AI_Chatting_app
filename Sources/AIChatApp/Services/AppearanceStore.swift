@@ -114,6 +114,26 @@ enum FontPreset: String, CaseIterable, Identifiable {
         case .mono:   return .system(size: size, design: .monospaced)
         }
     }
+
+    /// 返回指定字号的 NSFont 等价物（供 NSTextView 等 AppKit 编辑器使用，
+    /// 视觉与 `font(size:)` 完全一致，含导入衬线字体）。
+    func nsFont(size: CGFloat) -> NSFont {
+        let system = NSFont.systemFont(ofSize: size)
+        let descriptor: NSFontDescriptor
+        switch self {
+        case .serif:
+            if let family = Self.importedSerifFamily,
+               let custom = NSFont(name: family, size: size) {
+                return custom
+            }
+            descriptor = system.fontDescriptor.withDesign(.serif) ?? system.fontDescriptor
+        case .sans:
+            descriptor = system.fontDescriptor.withDesign(.default) ?? system.fontDescriptor
+        case .mono:
+            descriptor = system.fontDescriptor.withDesign(.monospaced) ?? system.fontDescriptor
+        }
+        return NSFont(descriptor: descriptor, size: size) ?? system
+    }
 }
 
 /// 字号分级（小 / 中 / 大 / 特大）。
