@@ -24,6 +24,12 @@ struct ChatView: View {
     /// Scroll to the latest message when content updates.
     @State private var lastMessageID: UUID?
 
+    /// 拖拽上传中转桥（消息列表区 drop → 输入栏待发送附件）。
+    @StateObject private var dropRouter = ChatDropRouter()
+
+    /// 拖拽文件悬停在聊天面板上时高亮。
+    @State private var isDropTargeted = false
+
     // MARK: - Body
 
     var body: some View {
@@ -72,10 +78,37 @@ struct ChatView: View {
                         documents: documents
                     )
                 },
-                isStreaming: chatViewModel.isStreaming
+                isStreaming: chatViewModel.isStreaming,
+                dropRouter: dropRouter
             )
         }
         .background(appearance.chatBackground)
+        // 拖拽上传：整个聊天面板都是 drop 目标，转发给输入栏挂载的 handler。
+        .dropDestination(for: URL.self) { urls, _ in
+            dropRouter.onDrop?(urls)
+            return true
+        } isTargeted: { targeted in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isDropTargeted = targeted
+            }
+        }
+        // 拖拽悬停提示：虚线框 + 「松手附加」胶囊。
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(appearance.accentColor,
+                            style: StrokeStyle(lineWidth: 2, dash: [6]))
+                    .padding(6)
+                    .overlay {
+                        Text(L("attach.drop.hint"))
+                            .font(.headline)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(appearance.accentColor.opacity(0.18))
+                            .clipShape(Capsule())
+                    }
+            }
+        }
         .onReceive(chatViewModel.$sessions) { sessions in
             if let activeID = chatViewModel.activeSessionID,
                let session = sessions.first(where: { $0.id == activeID }) {
@@ -473,7 +506,9 @@ private struct MessageBubble: View {
                 avatar
             }
 
-            VStack(alignment: .leading, spacing: 4) {
+            // 列内对齐跟随角色：assistant 靠左（头像在左），user 靠右（头像在右）。
+            // 元信息行（You + 时间）与图片/文档附件也随之对齐，不再漂到最左边。
+            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(roleLabel).font(.caption).foregroundStyle(.secondary)
                     // Per-message send/receive time: persisted with the message
@@ -743,6 +778,8 @@ private struct MessageBubble: View {
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
+        // 用户消息靠右：限宽避免文档卡片横贯整行、与右对齐的气泡脱节。
+        .frame(maxWidth: 380, alignment: .trailing)
     }
 
     // MARK: - Reasoning ("thinking") section
@@ -1093,6 +1130,13 @@ private struct UsageBarView: View {
     }
 }
 
+/// 拖拽文件的中转桥：把整个聊天面板（消息列表区）收到的文件 drop 转发给
+/// 输入栏的待发送附件状态。输入栏出现时注册自己的 handler，消失时清空。
+private final class ChatDropRouter: ObservableObject {
+    /// 当前输入栏注册的 drop 处理器（nil = 无输入栏）。
+    var onDrop: (([URL]) -> Void)?
+}
+
 // MARK: - Input bar
 
 /// Multi-line input with image attachments:
@@ -1104,6 +1148,9 @@ private struct InputBarView: View {
     let onSend: (String, [ImageAttachment], [DocumentAttachment]) -> Void
     let isStreaming: Bool
 
+    /// 拖拽上传中转桥（父级聊天面板的 drop 转发到这里）。
+    let dropRouter: ChatDropRouter
+
     @EnvironmentObject private var appearance: AppearanceStore
 
     /// 界面本地化——语言切换时即时刷新。
@@ -1113,6 +1160,10 @@ private struct InputBarView: View {
     @State private var pendingAttachments: [ImageAttachment] = []
     @State private var pendingDocuments: [DocumentAttachment] = []
     @FocusState private var isFocused: Bool
+
+    /// 支持直接拖入的图片扩展名（与上传按钮一致）。
+    private static let imageExtensions: Set<String> =
+        ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1140,6 +1191,9 @@ private struct InputBarView: View {
                 } label: {
                     Image(systemName: "photo.on.rectangle")
                         .font(.system(size: 14))
+                        // 固定框 + 居中：不同 SF Symbol 自带高度基准不同，
+                        // 不套框时两个按钮视觉上会上下错位。
+                        .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.borderless)
                 .help(L("attach.image"))
@@ -1149,6 +1203,7 @@ private struct InputBarView: View {
                 } label: {
                     Image(systemName: "doc.badge.plus")
                         .font(.system(size: 14))
+                        .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.borderless)
                 .help(L("attach.pdf"))
@@ -1184,6 +1239,17 @@ private struct InputBarView: View {
         }
         .padding(.vertical, 8)
         .background(Color(nsColor: .windowBackgroundColor))
+        // 挂载拖拽处理器：整个聊天面板的 drop 通过 router 到这里。
+        .onAppear {
+            dropRouter.onDrop = { urls in
+                handleDropped(urls)
+            }
+        }
+        .onDisappear {
+            if dropRouter.onDrop != nil {
+                dropRouter.onDrop = nil
+            }
+        }
     }
 
     private var isSendDisabled: Bool {
@@ -1212,6 +1278,49 @@ private struct InputBarView: View {
         pendingDocuments.removeAll { $0.id == document.id }
     }
 
+    // MARK: - 附件添加（按钮选择与拖拽共用）
+
+    /// 拖入的文件统一入口：图片/PDF 分别进入待发送列表，其余忽略。
+    private func handleDropped(_ urls: [URL]) {
+        for url in urls {
+            let ext = url.pathExtension.lowercased()
+            if Self.imageExtensions.contains(ext) {
+                addImage(from: url)
+            } else if ext == "pdf" {
+                addPDF(from: url)
+            }
+        }
+    }
+
+    private func addImage(from url: URL) {
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return }
+        guard data.count <= 10 * 1024 * 1024 else { return } // cap 10MB
+        let mime = Self.mimeType(for: url.pathExtension)
+        pendingAttachments.append(
+            ImageAttachment(
+                filename: url.lastPathComponent,
+                mimeType: mime,
+                base64Data: data.base64EncodedString()
+            )
+        )
+    }
+
+    private func addPDF(from url: URL) {
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return }
+        // PDFs get a larger cap than images (documents are heavier).
+        guard data.count <= 30 * 1024 * 1024 else { return } // cap 30MB
+        let pages = PDFProcessor.pageCount(from: data)
+        guard pages > 0 else { return } // invalid / non-PDF
+        pendingDocuments.append(
+            DocumentAttachment(
+                filename: url.lastPathComponent,
+                mimeType: "application/pdf",
+                base64Data: data.base64EncodedString(),
+                pageCount: pages
+            )
+        )
+    }
+
     private func pickImages() {
         let panel = NSOpenPanel()
         panel.title = L("attach.image")
@@ -1221,22 +1330,13 @@ private struct InputBarView: View {
         panel.canChooseFiles = true
         // Modern macOS 12+ API: build UTTypes from extensions (avoids the
         // deprecated `allowedFileTypes`).
-        panel.allowedContentTypes = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff"]
+        panel.allowedContentTypes = Self.imageExtensions
             .compactMap { UTType(filenameExtension: $0) }
 
         guard panel.runModal() == .OK else { return }
 
         for url in panel.urls {
-            guard let data = try? Data(contentsOf: url) else { continue }
-            if data.count > 10 * 1024 * 1024 { continue } // cap 10MB
-            let mime = Self.mimeType(for: url.pathExtension)
-            pendingAttachments.append(
-                ImageAttachment(
-                    filename: url.lastPathComponent,
-                    mimeType: mime,
-                    base64Data: data.base64EncodedString()
-                )
-            )
+            addImage(from: url)
         }
     }
 
@@ -1265,19 +1365,7 @@ private struct InputBarView: View {
         guard panel.runModal() == .OK else { return }
 
         for url in panel.urls {
-            guard let data = try? Data(contentsOf: url) else { continue }
-            // PDFs get a larger cap than images (documents are heavier).
-            if data.count > 30 * 1024 * 1024 { continue } // cap 30MB
-            let pages = PDFProcessor.pageCount(from: data)
-            guard pages > 0 else { continue } // invalid / non-PDF
-            pendingDocuments.append(
-                DocumentAttachment(
-                    filename: url.lastPathComponent,
-                    mimeType: "application/pdf",
-                    base64Data: data.base64EncodedString(),
-                    pageCount: pages
-                )
-            )
+            addPDF(from: url)
         }
     }
 }
