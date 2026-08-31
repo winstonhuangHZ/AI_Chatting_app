@@ -53,11 +53,26 @@ struct ImageAttachment: Identifiable, Codable, Hashable {
     }
 }
 
+/// 上传 PDF 的发送方式（用户在上传后、发送前选择，随消息持久化）。
+///
+/// 默认 `.both`（图片 + 文字都发），对视觉模型最完整；文字层为空（扫描版）
+/// 或渲染失败时各自优雅回退。
+enum PDFSendMode: String, Codable, CaseIterable, Identifiable {
+    /// 全部转成 PNG 图片发送（视觉模型逐页渲染）。
+    case images = "images"
+    /// 提取文字发送（任何模型都适用）。
+    case text = "text"
+    /// 图片 + 文字都发送。
+    case both = "both"
+
+    var id: String { rawValue }
+}
+
 /// A single document (PDF) attachment embedded in a user message.
 ///
 /// The file bytes are stored base64-encoded; at request time the service
 /// either renders its pages into vision-model images (`image_url` parts) or
-/// extracts its text for text-only models.
+/// extracts its text for text-only models, according to `sendMode`.
 struct DocumentAttachment: Identifiable, Codable, Hashable {
 
     /// Stable identifier for this attachment.
@@ -75,20 +90,49 @@ struct DocumentAttachment: Identifiable, Codable, Hashable {
     /// Number of pages (computed at attach time; 0 when unknown).
     var pageCount: Int
 
-    // MARK: - Initializers
+    /// 发送方式（图片 / 文字 / 都发），默认两个都发。
+    var sendMode: PDFSendMode = .both
+
+    // MARK: - Coding (旧消息没有 sendMode 字段，需容错解码)
+
+    private enum CodingKeys: String, CodingKey {
+        case id, filename, mimeType, base64Data, pageCount, sendMode
+    }
 
     init(
         id: UUID = UUID(),
         filename: String,
         mimeType: String,
         base64Data: String,
-        pageCount: Int = 0
+        pageCount: Int = 0,
+        sendMode: PDFSendMode = .both
     ) {
         self.id = id
         self.filename = filename
         self.mimeType = mimeType
         self.base64Data = base64Data
         self.pageCount = pageCount
+        self.sendMode = sendMode
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        filename = try c.decode(String.self, forKey: .filename)
+        mimeType = try c.decode(String.self, forKey: .mimeType)
+        base64Data = try c.decode(String.self, forKey: .base64Data)
+        pageCount = try c.decodeIfPresent(Int.self, forKey: .pageCount) ?? 0
+        sendMode = try c.decodeIfPresent(PDFSendMode.self, forKey: .sendMode) ?? .both
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(filename, forKey: .filename)
+        try c.encode(mimeType, forKey: .mimeType)
+        try c.encode(base64Data, forKey: .base64Data)
+        try c.encode(pageCount, forKey: .pageCount)
+        try c.encode(sendMode, forKey: .sendMode)
     }
 
     /// Decodes the base64 payload back into `Data` (for preview / processing).

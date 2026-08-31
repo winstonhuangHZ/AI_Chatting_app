@@ -762,10 +762,19 @@ private struct MessageBubble: View {
                             .font(.system(size: 11))
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        if document.pageCount > 0 {
-                            Text(L("pdf.pages", document.pageCount))
-                                .font(.system(size: 9))
-                                .foregroundStyle(.tertiary)
+                        HStack(spacing: 4) {
+                            if document.pageCount > 0 {
+                                Text(L("pdf.pages", document.pageCount))
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            // 发送方式徽标（PNG / 文字 / 都发）。
+                            Text(document.sendMode.badgeText)
+                                .font(.system(size: 8, weight: .semibold))
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(document.sendMode.badgeColor.opacity(0.18))
+                                .clipShape(Capsule())
                         }
                     }
                     Spacer(minLength: 0)
@@ -1175,9 +1184,11 @@ private struct InputBarView: View {
                         }
                     }
                     ForEach(pendingDocuments) { document in
-                        PendingDocumentChip(document: document) {
-                            removeDocument(document)
-                        }
+                        PendingDocumentChip(
+                            document: document,
+                            onRemove: { removeDocument(document) },
+                            onSetMode: { mode in setDocumentMode(document, mode) }
+                        )
                     }
                     Spacer()
                 }
@@ -1275,6 +1286,12 @@ private struct InputBarView: View {
 
     private func removeDocument(_ document: DocumentAttachment) {
         pendingDocuments.removeAll { $0.id == document.id }
+    }
+
+    /// 修改某个待发送 PDF 的发送方式（图片 / 文字 / 都发）。
+    private func setDocumentMode(_ document: DocumentAttachment, _ mode: PDFSendMode) {
+        guard let index = pendingDocuments.firstIndex(where: { $0.id == document.id }) else { return }
+        pendingDocuments[index].sendMode = mode
     }
 
     // MARK: - 附件添加（按钮选择与拖拽共用）
@@ -1581,6 +1598,7 @@ private struct PendingAttachmentChip: View {
 private struct PendingDocumentChip: View {
     let document: DocumentAttachment
     let onRemove: () -> Void
+    let onSetMode: (PDFSendMode) -> Void
 
     var body: some View {
         HStack(spacing: 5) {
@@ -1593,13 +1611,45 @@ private struct PendingDocumentChip: View {
                     .font(.system(size: 10))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if document.pageCount > 0 {
-                    Text(L("pdf.pages", document.pageCount))
-                        .font(.system(size: 8))
-                        .foregroundStyle(.tertiary)
+                HStack(spacing: 4) {
+                    if document.pageCount > 0 {
+                        Text(L("pdf.pages", document.pageCount))
+                            .font(.system(size: 8))
+                            .foregroundStyle(.tertiary)
+                    }
+                    // 当前发送方式徽标。
+                    Text(document.sendMode.badgeText)
+                        .font(.system(size: 8, weight: .semibold))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(document.sendMode.badgeColor.opacity(0.18))
+                        .clipShape(Capsule())
                 }
             }
             .frame(maxWidth: 120)
+
+            // "..." 详情菜单：选择发送方式（全部 PNG / 提取文字 / 都发）。
+            Menu {
+                ForEach(PDFSendMode.allCases) { mode in
+                    Button {
+                        onSetMode(mode)
+                    } label: {
+                        if mode == document.sendMode {
+                            Label(mode.localizedName, systemImage: "checkmark")
+                        } else {
+                            Label(mode.localizedName, systemImage: mode.symbol)
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help(L("pdf.mode.title"))
 
             Button(action: onRemove) {
                 Image(systemName: "xmark.circle.fill")
@@ -1611,6 +1661,46 @@ private struct PendingDocumentChip: View {
         .padding(4)
         .background(Color.gray.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+// MARK: - PDF 发送方式显示辅助
+
+extension PDFSendMode {
+    /// 菜单里的完整名称（本地化）。
+    var localizedName: String {
+        switch self {
+        case .images: return L("pdf.mode.images")
+        case .text:   return L("pdf.mode.text")
+        case .both:   return L("pdf.mode.both")
+        }
+    }
+
+    /// 菜单 / 徽标用的 SF Symbol。
+    var symbol: String {
+        switch self {
+        case .images: return "photo.on.rectangle"
+        case .text:   return "text.alignleft"
+        case .both:   return "doc.richtext"
+        }
+    }
+
+    /// 徽标短文本（本地化）。
+    var badgeText: String {
+        switch self {
+        case .images: return L("pdf.mode.badge.images")
+        case .text:   return L("pdf.mode.badge.text")
+        case .both:   return L("pdf.mode.badge.both")
+        }
+    }
+
+    /// 徽标颜色（按类型区分）。
+    var badgeColor: Color {
+        switch self {
+        case .images: return .blue
+        case .text:   return .green
+        case .both:   return .purple
+        }
     }
 }
 

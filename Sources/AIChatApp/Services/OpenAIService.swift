@@ -641,10 +641,10 @@ actor OpenAIService {
             }
 
             if isVision {
+                // 视觉模型：按每个 PDF 的 sendMode 发送（图片 / 文字 / 都发）。
                 for document in message.documentAttachments {
-                    let pages = await pdfPageImages(for: document)
-                    if pages.isEmpty {
-                        // Render failed (scanned/encrypted PDF): fall back to text.
+                    switch document.sendMode {
+                    case .text:
                         let text = await pdfText(for: document)
                         if !text.isEmpty {
                             parts.append(PayloadContentPart(
@@ -653,13 +653,37 @@ actor OpenAIService {
                                 image_url: nil
                             ))
                         }
-                    } else {
-                        for base64 in pages {
-                            parts.append(PayloadContentPart(
-                                type: "image_url",
-                                text: nil,
-                                image_url: PayloadImageURL(url: "data:image/png;base64,\(base64)")
-                            ))
+                    case .images, .both:
+                        let pages = await pdfPageImages(for: document)
+                        if pages.isEmpty {
+                            // Render failed (scanned/encrypted PDF): best-effort
+                            // text fallback so the document still reaches the model.
+                            let text = await pdfText(for: document)
+                            if !text.isEmpty {
+                                parts.append(PayloadContentPart(
+                                    type: "text",
+                                    text: pdfTextPart(document, text),
+                                    image_url: nil
+                                ))
+                            }
+                        } else {
+                            for base64 in pages {
+                                parts.append(PayloadContentPart(
+                                    type: "image_url",
+                                    text: nil,
+                                    image_url: PayloadImageURL(url: "data:image/png;base64,\(base64)")
+                                ))
+                            }
+                            if document.sendMode == .both {
+                                let text = await pdfText(for: document)
+                                if !text.isEmpty {
+                                    parts.append(PayloadContentPart(
+                                        type: "text",
+                                        text: pdfTextPart(document, text),
+                                        image_url: nil
+                                    ))
+                                }
+                            }
                         }
                     }
                 }
@@ -672,6 +696,7 @@ actor OpenAIService {
                     ))
                 }
             } else {
+                // 文本模型：图片发不了，任何 sendMode 都退化为提取文字。
                 for document in message.documentAttachments {
                     let text = await pdfText(for: document)
                     if !text.isEmpty {
