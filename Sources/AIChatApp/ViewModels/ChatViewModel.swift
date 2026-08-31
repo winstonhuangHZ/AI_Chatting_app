@@ -158,9 +158,15 @@ final class ChatViewModel: ObservableObject {
 
         // 渐进增强：老配置里保存的 systemPrompt 可能缺少「删除/修改偏好」指令，
         // 自动补齐，让模型可以按新协议更新 personalization。
+        //
+        // 缓存血泪（实测）：profile 消息固定在 messages 第 1 位，模型每
+        // upsert/remove 一条偏好，profile JSON 就变化一次，其后的整段会话
+        // 历史全部缓存失配（命中率从 99% 崩到 ~28%）。所以这里的指令刻意
+        // 收紧：只允许写入持久稳定的事实，禁止当前话题/一次性事件/易变状态。
         let deleteMarker = "\"op\": \"remove\""
         let updateMarker = "To UPDATE an existing preference"
-        if !prompt.contains(deleteMarker) || !prompt.contains(updateMarker) {
+        let durableMarker = "DURABLE FACTS ONLY"
+        if !prompt.contains(deleteMarker) || !prompt.contains(updateMarker) || !prompt.contains(durableMarker) {
             prompt += """
 
             PERSONALIZATION OPS: You may modify the user profile preferences \
@@ -168,18 +174,27 @@ final class ChatViewModel: ObservableObject {
             <!-- PERSONALIZATION: {"preferences": [{"op": "remove", "category": "location"}]} -->
             To UPDATE an existing preference, send the same category with a new value:
             <!-- PERSONALIZATION: {"preferences": [{"category": "language", "value": "English"}]} -->
+            DURABLE FACTS ONLY — CRITICAL: persist ONLY stable, long-term facts \
+            about the user (name, language, location, occupation, skills, fixed \
+            preferences). NEVER write: topics of the current conversation, one-off \
+            events, dates/scores/deadlines/statuses that change over time (exam \
+            dates, results, schedules), or anything already visible in the \
+            conversation. When a fact changes, UPDATE the existing entry (same \
+            category, new value) — never append a duplicate.
             """
         }
         // 渐进增强：老配置可能没有「标记可放开头/结尾」的说明，自动补齐，
         // 避免模型只在回复末尾才想起写个人化标记而漏掉。
         let startMarker = "AT THE VERY START"
-        if !prompt.contains(startMarker) {
+        let restraintMarker = "ONLY when you learn"
+        if !prompt.contains(startMarker) || !prompt.contains(restraintMarker) {
             prompt += """
 
             PERSONALIZATION PLACEMENT: The invisible PERSONALIZATION note may be \
             placed AT THE VERY START of your reply (before the visible answer) \
             OR at the very end — both are detected and stripped automatically. \
-            Emit it as soon as you know the preference; do not wait until the end.
+            Emit it ONLY when you learn a genuinely durable fact (see DURABLE \
+            FACTS ONLY); never pollute the profile with conversation topics.
             """
         }
 
