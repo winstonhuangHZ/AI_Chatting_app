@@ -49,12 +49,22 @@ enum FontPreset: String, CaseIterable, Identifiable {
     /// `Identifiable` conformance。
     var id: String { rawValue }
 
+    /// 用户导入的衬线字体族名（Settings → 外观 → 导入字体），无导入时为 nil。
+    ///
+    /// 内置衬线是系统 serif（拉丁 New York + 中文宋体 Songti SC 系统级联）；
+    /// 导入字体（如 Newsreader SC 合并字体）存在时优先使用，实现中英文同字体。
+    fileprivate static var importedSerifFamily: String? {
+        ImportedFontManager.shared.familyName
+    }
+
     /// 提供该预设下的主要字体（中文优先回退系统字体）。
     var uiFont: Font {
         switch self {
         case .serif:
-            // 衬线：内置 Newsreader SC（Newsreader 拉丁 + 宋体中文字形）。
-            return .custom("Newsreader SC", size: 14)
+            if let family = Self.importedSerifFamily {
+                return .custom(family, size: 14)
+            }
+            return .system(.body, design: .serif)
         case .sans:
             return .system(.body, design: .default)
         case .mono:
@@ -65,7 +75,11 @@ enum FontPreset: String, CaseIterable, Identifiable {
     /// 设置在 SwiftUI Text 上的字体（供 MessageBubble/Markdown 使用）。
     var textFont: Font {
         switch self {
-        case .serif:  return .custom("Newsreader SC", size: 14)
+        case .serif:
+            if let family = Self.importedSerifFamily {
+                return .custom(family, size: 14)
+            }
+            return .system(.body, design: .serif)
         case .sans:   return .system(.body, design: .default)
         case .mono:   return .system(.body, design: .monospaced)
         }
@@ -73,13 +87,16 @@ enum FontPreset: String, CaseIterable, Identifiable {
 
     /// MarkdownUI 可用的字体族（按预设注入）。
     ///
-    /// serif 使用内置的 `Newsreader SC`（Newsreader 拉丁字形 + 宋体 Songti SC
-    /// 中文字形合并于同一字体文件，启动时注册；见 `BundledFonts`），因此
-    /// MarkdownUI 只需 `.custom("Newsreader SC")` 即可中英文同字体零回退。
-    /// sans/mono 继续用系统设计（分别对应无衬线 / 等宽，含中文回退）。
+    /// serif 在用户导入字体（如 Newsreader SC）时用 `.custom(...)`，否则用
+    /// `.system(.serif)`——系统级联自动给出「拉丁 New York + 中文宋体 Songti
+    /// SC」。sans/mono 继续用系统设计。
     var fontPropertiesFamily: FontProperties.Family {
         switch self {
-        case .serif:  return .custom("Newsreader SC")
+        case .serif:
+            if let family = Self.importedSerifFamily {
+                return .custom(family)
+            }
+            return .system(.serif)
         case .sans:   return .system(.default)
         case .mono:   return .system(.monospaced)
         }
@@ -88,7 +105,11 @@ enum FontPreset: String, CaseIterable, Identifiable {
     /// 返回指定字号的 SwiftUI Font（供 Label/Text/TextField 等任何视图使用）。
     func font(size: CGFloat) -> Font {
         switch self {
-        case .serif:  return .custom("Newsreader SC", size: size)
+        case .serif:
+            if let family = Self.importedSerifFamily {
+                return .custom(family, size: size)
+            }
+            return .system(size: size, design: .serif)
         case .sans:   return .system(size: size, design: .default)
         case .mono:   return .system(size: size, design: .monospaced)
         }
@@ -318,7 +339,11 @@ extension Text {
     /// 应用当前字体预设 + 字号到 Text。
     func appearanceFont(_ preset: FontPreset, size: CGFloat) -> Text {
         switch preset {
-        case .serif:  return self.font(.custom("Newsreader SC", size: size))
+        case .serif:
+            if let family = FontPreset.importedSerifFamily {
+                return self.font(.custom(family, size: size))
+            }
+            return self.font(.system(size: size, design: .serif))
         case .sans:   return self.font(.system(size: size, design: .default))
         case .mono:   return self.font(.system(size: size, design: .monospaced))
         }

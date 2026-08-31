@@ -1,25 +1,4 @@
 import SwiftUI
-import CoreText
-
-/// Registers the bundled `Newsreader SC` fonts at launch so `Font.custom`
-/// / MarkdownUI `FontFamily(.custom(...))` resolve them by name without any
-/// system fallback. Each weight already contains BOTH the Newsreader Latin
-/// glyphs and the Songti SC CJK glyphs (merged with fontTools `pyftmerge`).
-enum BundledFonts {
-    static func register() {
-        for name in ["NewsreaderSC-Regular", "NewsreaderSC-Bold", "NewsreaderSC-Italic"] {
-            // `.copy("Resources/Fonts")` keeps the folder, so look inside the
-            // `Fonts` subdirectory of the module bundle.
-            let url = Bundle.module.url(
-                forResource: name,
-                withExtension: "ttf",
-                subdirectory: "Fonts"
-            ) ?? Bundle.module.url(forResource: name, withExtension: "ttf")
-            guard let url else { continue }
-            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
-        }
-    }
-}
 
 /// Modern SwiftUI app entry point (macOS 14+).
 @main
@@ -51,8 +30,8 @@ struct AIChatApp: App {
     // MARK: - Initializers
 
     init() {
-        // 注册内置 Newsreader SC 字体（Newsreader 拉丁 + 宋体中文字形合并体）。
-        BundledFonts.register()
+        // 注册用户导入的衬线字体（见 ImportedFontManager；未导入时无操作）。
+        ImportedFontManager.shared.activateInstalled()
 
         // 建立唯一的 store 层级，所有层共享同一实例。
         let configStore = ConfigStore()

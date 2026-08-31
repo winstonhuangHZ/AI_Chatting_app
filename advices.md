@@ -61,6 +61,8 @@ DeepSeek 硬盘缓存按 **"下一轮请求的前缀完整包含上一轮落盘�
 - 正确布局：`system prompt → profile → 完整历史`（动态内容放最前，实测命中率 99%）
 - 实时信息（如当前时间）**改用工具获取**：工具消息只活在当轮请求内、不落盘历史，对下一轮前缀零污染
 - 序列化 Swift 字典必须加 `.sortedKeys`——字典 key 顺序每次随机，否则同一份数据每轮字节都不同
+- **⚠️ 2026-08-31 新增（本次实测）：`JSONEncoder` 不设 `.sortedKeys` 时，连 Codable struct 的字段顺序都是随机哈希序**——Foundation 内部键值容器是哈希表，per-process 随机种子。所以**所有 chat payload 编码必须统一用 `.sortedKeys` 的共享 encoder**（`chatPayloadEncoder`）。之前"struct 声明序保证稳定"的假设是错的：同进程内看起来稳定，每次重启 App 整个请求（含 tools、messages 的每个字段）字节全变，缓存每轮全灭。另外 `tools[].function.parameters` 是 `[String: Any]`，`PayloadJSON` 里要显式按 key 排序编码，双保险。
+- 时序：本次就是"Agent 模式开着（每轮都带 tools）→ 重启 App → tools JSON key 乱序 → 缓存崩溃"，且 `includeTimestamp` 开关冗余（Agent 已含 get_time），已关。
 
 ---
 

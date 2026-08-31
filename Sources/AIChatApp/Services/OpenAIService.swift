@@ -42,13 +42,24 @@ enum OpenAIServiceError: LocalizedError, Equatable {
 // MARK: - Deterministic payload encoding
 //
 // CRITICAL CACHE NOTE:
-// `JSONSerialization.data(withJSONObject:)` on a `[String: Any]` dictionary
-// does NOT guarantee a stable key order between process runs. Cloud prompt
-// caches hash the exact request bytes; a reordered key makes every request
-// look "new" and the cache NEVER hits.
+// Cloud prompt caches (DeepSeek) hash the exact request bytes. Foundation's
+// JSONEncoder stores keyed-container fields in an internal hash table and —
+// WITHOUT `.sortedKeys` — iterates it in hash order, which is randomized per
+// process launch. So even Codable structs emit their fields in a DIFFERENT
+// order on every app restart; the whole request looks "new" and the prompt
+// cache NEVER hits again.
 //
-// Codable structs emit fields in declaration order — deterministic and
-// byte-stable across runs — so we use them for the chat request body.
+// Fix: `.sortedKeys` on the shared `chatPayloadEncoder` (plus explicitly
+// sorted tool-schema dictionaries in `PayloadJSON`) makes the request bytes
+// byte-identical across runs and across restarts.
+
+/// JSONEncoder for the chat request body. `.sortedKeys` is mandatory for
+/// byte-stable payloads across process launches (see note above).
+private let chatPayloadEncoder: JSONEncoder = {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return encoder
+}()
 
 /// Top-level `/v1/chat/completions` request body with stable field order.
 private struct ChatPayload: Encodable {
@@ -192,6 +203,12 @@ private struct PayloadToolFunction: Encodable {
 }
 
 /// Recursive JSON value that can be encoded into a tool schema.
+///
+/// Dictionaries are encoded with SORTED keys: Swift `Dictionary` iteration
+/// order is randomized per process (per-run hash seed), so without sorting the
+/// `tools[].function.parameters` bytes change every app launch — and since
+/// `tools` precedes `messages` in the payload, DeepSeek's byte-identical
+/// prompt-cache prefix NEVER matches after a restart (hit rate collapses).
 private enum PayloadJSON: Encodable {
     case object([String: PayloadJSON])
     case array([PayloadJSON])
@@ -217,15 +234,45 @@ private enum PayloadJSON: Encodable {
     }
 
     func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
         switch self {
-        case .object(let dict): try container.encode(dict)
-        case .array(let array): try container.encode(array)
-        case .string(let string): try container.encode(string)
-        case .number(let number): try container.encode(number)
-        case .bool(let bool): try container.encode(bool)
-        case .null: try container.encodeNil()
+        case .object(let dict):
+            // Deterministic key order for the tool schema (see type doc above).
+            var keyed = encoder.container(keyedBy: SortedCodingKey.self)
+            for (key, value) in dict.sorted(by: { $0.key < $1.key }) {
+                try keyed.encode(value, forKey: SortedCodingKey(stringValue: key))
+            }
+        case .array(let array):
+            var container = encoder.singleValueContainer()
+            try container.encode(array)
+        case .string(let string):
+            var container = encoder.singleValueContainer()
+            try container.encode(string)
+        case .number(let number):
+            var container = encoder.singleValueContainer()
+            try container.encode(number)
+        case .bool(let bool):
+            var container = encoder.singleValueContainer()
+            try container.encode(bool)
+        case .null:
+            var container = encoder.singleValueContainer()
+            try container.encodeNil()
         }
+    }
+}
+
+/// `CodingKey` backed by a string, used to emit sorted JSON object keys.
+private struct SortedCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int?
+
+    init(stringValue: String) {
+        self.stringValue = stringValue
+        self.intValue = nil
+    }
+
+    init?(intValue: Int) {
+        self.stringValue = "\(intValue)"
+        self.intValue = intValue
     }
 }
 
@@ -979,7 +1026,7 @@ actor OpenAIService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         do {
-            request.httpBody = try JSONEncoder().encode(payload)
+            request.httpBody = try chatPayloadEncoder.encode(payload)
         } catch {
             throw OpenAIServiceError.transport(
                 "Failed to encode request body: \(error.localizedDescription)"
@@ -1105,7 +1152,7 @@ actor OpenAIService {
         )
 
         do {
-            request.httpBody = try JSONEncoder().encode(payload)
+            request.httpBody = try chatPayloadEncoder.encode(payload)
         } catch {
             throw OpenAIServiceError.transport(
                 "Failed to encode request body: \(error.localizedDescription)"
@@ -1251,7 +1298,7 @@ actor OpenAIService {
         )
 
         do {
-            request.httpBody = try JSONEncoder().encode(payload)
+            request.httpBody = try chatPayloadEncoder.encode(payload)
         } catch {
             throw OpenAIServiceError.transport("Failed to encode body: \(error.localizedDescription)")
         }
