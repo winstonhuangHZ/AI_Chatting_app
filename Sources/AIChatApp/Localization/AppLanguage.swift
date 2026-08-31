@@ -119,6 +119,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "price.unknown": "(price unknown for this model)",
         "relay.price": "(relay price)",
         "msg.copy": "Copy",
+        "codeblock.copied": "Copied",
         "msg.delete": "Delete",
         "msg.retry": "Retry",
 
@@ -291,6 +292,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "price.unknown": "(该模型价格未知)",
         "relay.price": "(中转站价格)",
         "msg.copy": "复制",
+        "codeblock.copied": "已复制",
         "msg.delete": "删除",
         "msg.retry": "重新生成",
 
