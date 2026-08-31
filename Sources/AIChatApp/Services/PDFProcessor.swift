@@ -15,11 +15,18 @@ import AppKit
 /// (see `OpenAIService` which wraps them in `Task.detached`).
 enum PDFProcessor {
 
-    /// Maximum number of pages rendered for vision models (cost / context limit).
-    static let maxVisionPages = 5
-
     /// Longest edge (points) used when rasterizing a page for vision models.
     static let maxImageDimension: CGFloat = 1200
+
+    /// UserDefaults key for the configurable page-render limit.
+    static let maxRenderPagesKey = "pdf.maxRenderPages"
+
+    /// 用户可调参数：视觉模型最多渲染的 PDF 页数（0 = 全部页）。
+    /// 由设置界面写入，OpenAIService 渲染时读取。
+    static var maxRenderPages: Int {
+        let stored = UserDefaults.standard.integer(forKey: maxRenderPagesKey)
+        return max(stored, 0)
+    }
 
     // MARK: - Public API
 
@@ -34,11 +41,18 @@ enum PDFProcessor {
         return document.string ?? ""
     }
 
-    /// Renders up to `maxPages` pages to PNG `Data` (downscaled for vision
-    /// models). Returns an empty array for invalid PDFs.
-    static func renderPages(from data: Data, maxPages: Int = maxVisionPages) -> [Data] {
+    /// Renders pages of the PDF to PNG `Data` (downscaled for vision models).
+    ///
+    /// - Parameter maxPages: 上限页数；`nil` 或 `<= 0` = 渲染全部页。
+    /// - Returns: 每页一张 PNG；无效 PDF 返回空数组。
+    static func renderPages(from data: Data, maxPages: Int? = nil) -> [Data] {
         guard let document = PDFDocument(data: data) else { return [] }
-        let count = min(document.pageCount, maxPages)
+        let count: Int
+        if let maxPages, maxPages > 0 {
+            count = min(document.pageCount, maxPages)
+        } else {
+            count = document.pageCount
+        }
         var images: [Data] = []
         for index in 0..<count {
             guard let page = document.page(at: index),

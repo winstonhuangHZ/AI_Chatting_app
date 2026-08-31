@@ -531,16 +531,21 @@ actor OpenAIService {
     private actor PDFPrepCache {
         static let shared = PDFPrepCache()
 
-        /// attachment id → base64 PNG page images (vision models).
-        private var pages: [UUID: [String]] = [:]
+        /// "attachmentID:maxPages" → base64 PNG page images (vision models)。
+        /// key 带页数：改「最多渲染页数」设置后缓存不会复用旧页数结果。
+        private var pages: [String: [String]] = [:]
 
         /// attachment id → extracted text (text-only models).
         private var texts: [UUID: String] = [:]
 
-        func pages(for id: UUID) -> [String]? { pages[id] }
-        func setPages(_ value: [String], for id: UUID) {
+        static func pageKey(_ id: UUID, _ maxPages: Int) -> String {
+            "\(id.uuidString):\(maxPages)"
+        }
+
+        func pages(for id: UUID, maxPages: Int) -> [String]? { pages[Self.pageKey(id, maxPages)] }
+        func setPages(_ value: [String], for id: UUID, maxPages: Int) {
             if pages.count > 24 { pages.removeAll() }
-            pages[id] = value
+            pages[Self.pageKey(id, maxPages)] = value
         }
         func text(for id: UUID) -> String? { texts[id] }
         func setText(_ value: String, for id: UUID) {
@@ -550,15 +555,17 @@ actor OpenAIService {
     }
 
     /// Renders a PDF into base64 PNG pages (memoized), off the main thread.
+    /// 页数上限读用户可调参数 `PDFProcessor.maxRenderPages`（0 = 全部页）。
     private static func pdfPageImages(for document: DocumentAttachment) async -> [String] {
-        if let cached = await PDFPrepCache.shared.pages(for: document.id), !cached.isEmpty {
+        let limit = PDFProcessor.maxRenderPages
+        if let cached = await PDFPrepCache.shared.pages(for: document.id, maxPages: limit), !cached.isEmpty {
             return cached
         }
         guard let data = document.decodedData, !data.isEmpty else { return [] }
         let images = await Task.detached(priority: .userInitiated) {
-            PDFProcessor.renderPages(from: data).map { $0.base64EncodedString() }
+            PDFProcessor.renderPages(from: data, maxPages: limit).map { $0.base64EncodedString() }
         }.value
-        await PDFPrepCache.shared.setPages(images, for: document.id)
+        await PDFPrepCache.shared.setPages(images, for: document.id, maxPages: limit)
         return images
     }
 
