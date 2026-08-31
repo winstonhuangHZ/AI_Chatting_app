@@ -24,10 +24,23 @@ struct MemoryNotice: Identifiable, Equatable {
     }
 }
 
-    /// Transient banner explaining a cache reset caused by a profile change.
+    /// Transient banner explaining a cache reset caused by a profile change or
+    /// by the user editing the conversation history (delete/regenerate).
     struct CacheResetNotice: Identifiable, Equatable {
+        enum Reason {
+            /// The shared profile message changed → whole-history prefix reset.
+            case profileChanged
+            /// A message was deleted/regenerated → prefix diverges from that point.
+            case historyEdited
+        }
+
         let id: UUID
-        init(id: UUID = UUID()) { self.id = id }
+        let reason: Reason
+
+        init(id: UUID = UUID(), reason: Reason) {
+            self.id = id
+            self.reason = reason
+        }
     }
 
 /// A chat message matching the sidebar full-text search.
@@ -166,7 +179,7 @@ final class ChatViewModel: ObservableObject {
     private func trackProfileChange() {
         let hash = userProfileStore.payloadHash
         if let last = lastProfilePayloadHash, last != hash {
-            cacheResetNotice = CacheResetNotice()
+            cacheResetNotice = CacheResetNotice(reason: .profileChanged)
         }
         lastProfilePayloadHash = hash
     }
@@ -324,6 +337,8 @@ final class ChatViewModel: ObservableObject {
             cancelStreaming()
         }
         sessionStore.deleteMessage(message, in: sessionID)
+        // 删除消息会改变该会话历史的字节前缀 → 下次请求缓存从删除点起重置。
+        cacheResetNotice = CacheResetNotice(reason: .historyEdited)
     }
 
     /// Re-generates an assistant reply by deleting it and letting the model
@@ -343,6 +358,9 @@ final class ChatViewModel: ObservableObject {
         // 删除这条 assistant 回复。
         sessionStore.deleteMessage(message, in: sessionID)
         clearError()
+
+        // 重试=删除+重发：历史字节前缀从删除点重置 → 显式提示。
+        cacheResetNotice = CacheResetNotice(reason: .historyEdited)
 
         // 若共享 profile 自上次请求后变化，缓存前缀将重置 —— 先记录以便提示。
         trackProfileChange()
@@ -550,7 +568,7 @@ final class ChatViewModel: ObservableObject {
                     }
                     // One-shot render.
                     self.sessionStore.updateLastAssistantContent(
-                        Self.stripPersonalization(from: accumulated),
+                        Self.finalReply(accumulated),
                         in: sessionID
                     )
                     self.hasReceivedFirstToken = false
@@ -608,14 +626,14 @@ final class ChatViewModel: ObservableObject {
                     if lastFlush.duration(to: .now) > .milliseconds(100) {
                         lastFlush = .now
                         self.sessionStore.updateLastAssistantContent(
-                            Self.stripPersonalization(from: accumulated),
+                            Self.stripReplyMarkup(accumulated),
                             in: sessionID
                         )
                     }
                 }
                 // Always flush the final accumulated text after the stream ends.
                 self.sessionStore.updateLastAssistantContent(
-                    Self.stripPersonalization(from: accumulated),
+                    Self.finalReply(accumulated),
                     in: sessionID
                 )
 
@@ -698,7 +716,7 @@ final class ChatViewModel: ObservableObject {
                 if renderAsYouGo, lastFlush.duration(to: .now) > .milliseconds(100) {
                     lastFlush = .now
                     sessionStore.updateLastAssistantContent(
-                        Self.stripPersonalization(from: accumulated),
+                        Self.stripReplyMarkup(accumulated),
                         in: sessionID
                     )
                 }
@@ -729,7 +747,7 @@ final class ChatViewModel: ObservableObject {
 
         // Always flush the final accumulated text after the stream ends.
         sessionStore.updateLastAssistantContent(
-            Self.stripPersonalization(from: accumulated),
+            Self.finalReply(accumulated),
             in: sessionID
         )
 
@@ -780,6 +798,79 @@ final class ChatViewModel: ObservableObject {
             result.removeSubrange(start.lowerBound..<end.upperBound)
         }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Removes hallucinated XML tool-call markup (`<tool_calls>` / `<invoke>` /
+    /// `<parameter>`) from a reply. Some models (DeepSeek) emit Claude-style
+    /// XML tool calls as plain text when they want to search more but the tool
+    /// budget is exhausted — that markup must never reach the rendered bubble.
+    ///
+    /// Fence-aware: literal XML examples inside markdown code blocks are kept.
+    private static func stripToolCallMarkup(from text: String) -> String {
+        // Backreference \1: the closing tag must match the opening tag type, so
+        // an inner </invoke> inside <tool_calls>…</tool_calls> is consumed as
+        // content rather than ending the match early.
+        let blockPattern = #"(?is)<(tool_calls|invoke)\b[^>]*>.*?</\1\s*>"#
+        // Split by ``` fences; even-indexed segments are OUTSIDE fences.
+        let components = text.components(separatedBy: "```")
+        var result = ""
+        for (index, part) in components.enumerated() {
+            if index % 2 == 0 {
+                result += part.replacingOccurrences(
+                    of: blockPattern,
+                    with: "",
+                    options: .regularExpression
+                )
+            } else {
+                result += part
+            }
+            if index < components.count - 1 {
+                result += "```"
+            }
+        }
+        // Stray `<parameter …>…</parameter>` elements left after a truncated
+        // invocation block are removed too (but only outside code fences).
+        let components2 = result.components(separatedBy: "```")
+        var result2 = ""
+        for (index, part) in components2.enumerated() {
+            if index % 2 == 0 {
+                result2 += part.replacingOccurrences(
+                    of: #"(?is)<parameter\b[^>]*>.*?</parameter\s*>"#,
+                    with: "",
+                    options: .regularExpression
+                )
+            } else {
+                result2 += part
+            }
+            if index < components2.count - 1 {
+                result2 += "```"
+            }
+        }
+        return result2.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Returns `true` when the reply contains tool-call markup that we would
+    /// strip — used to decide the empty-answer fallback.
+    private static func containsToolCallMarkup(_ text: String) -> Bool {
+        text.range(of: #"(?i)<tool_calls\b"#, options: .regularExpression) != nil
+            || text.range(of: #"(?i)<invoke\b"#, options: .regularExpression) != nil
+    }
+
+    /// Intermediate flush during streaming: strip invisible markup, no fallback
+    /// (more text may still arrive, so the bubble can go briefly empty).
+    private static func stripReplyMarkup(_ text: String) -> String {
+        stripToolCallMarkup(from: stripPersonalization(from: text))
+    }
+
+    /// Final content for a finished reply: strip markup and, if the model's
+    /// whole reply was just a tool-call block (budget exhausted with no text),
+    /// replace it with a graceful note instead of an empty bubble.
+    private static func finalReply(_ text: String) -> String {
+        let cleaned = stripReplyMarkup(text)
+        if cleaned.isEmpty, containsToolCallMarkup(text) {
+            return L("tool.call.stripped")
+        }
+        return cleaned
     }
 
     // MARK: - Full-text search

@@ -809,7 +809,7 @@ actor OpenAIService {
                 parameters: tool.parameters
             ))
         }
-        let maxRounds = 5
+        let maxRounds = 8
 
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -888,23 +888,38 @@ actor OpenAIService {
                         }
                     }
 
-                    // 循环耗尽仍无文本答案（模型每轮都只返回 tool_calls）：
-                    // 追加一轮**不带 tools** 的收尾请求，强制模型基于已执行
-                    // 的工具结果整理出最终答案，避免"工具用完就静默结束"。
-                    if !gotFinalAnswer {
-                        let outcome = try await performToolRound(
-                            url: url,
-                            model: model,
-                            apiKey: config.apiKey,
-                            history: history,
-                            tools: nil,
-                            continuation: continuation,
-                            usageHandler: usageHandler
-                        )
-                        if !outcome.yieldedText {
-                            throw OpenAIServiceError.emptyStream
-                        }
-                    }
+        // 循环耗尽仍无文本答案（模型每轮都只返回 tool_calls）：
+        // 追加一轮**不带 tools** 的收尾请求，强制模型基于已执行
+        // 的工具结果整理出最终答案，避免"工具用完就静默结束"。
+        //
+        // 关键：必须显式告知模型工具预算已耗尽、禁止再调用工具，且
+        // 严禁把工具调用写成 XML 标记（<tool_calls>/<invoke>/<parameter>）
+        // 混进回复文本——否则 DeepSeek 会在"还想继续搜索但 tools 已被
+        // 摘除"时把训练中学到的 Claude 风格 XML 调用原样吐给用户。
+        if !gotFinalAnswer {
+            history.append(.message(PayloadMessage(
+                role: "system",
+                content: .text(
+                    "You have used all your tool calls for this request. "
+                    + "Compose your final answer NOW using the tool results already returned above. "
+                    + "Do NOT call any more tools. "
+                    + "Do NOT output any XML tool-call markup such as <tool_calls>, <invoke>, "
+                    + "or <parameter> tags in your reply — output only the final answer text."
+                )
+            )))
+            let outcome = try await performToolRound(
+                url: url,
+                model: model,
+                apiKey: config.apiKey,
+                history: history,
+                tools: nil,
+                continuation: continuation,
+                usageHandler: usageHandler
+            )
+            if !outcome.yieldedText {
+                throw OpenAIServiceError.emptyStream
+            }
+        }
 
                     // Deliver collected sources (web references) before finishing.
                     if !collectedSources.isEmpty {

@@ -100,12 +100,12 @@ struct ChatView: View {
                 }
             }
         }
-        // Cache-reset toast: shown when the shared profile changed since the
-        // last request (its message sits in the byte-identical cache prefix, so
-        // the whole history cache is reset). Auto-dismisses after 4s.
+        // Cache-reset toast: shown when the shared profile changed or a message
+        // was deleted/regenerated since the last request (both change the
+        // byte-identical prefix, so the history cache is reset).
         .overlay(alignment: .bottom) {
             if let notice = chatViewModel.cacheResetNotice {
-                CacheResetBanner {
+                CacheResetBanner(reason: notice.reason) {
                     chatViewModel.cacheResetNotice = nil
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -196,9 +196,13 @@ private struct MemoryNoticeBanner: View {
     }
 }
 
-/// Small transient toast shown when the shared profile changed since the last
-/// request, resetting the relay's cache prefix for the whole history.
+/// Small transient toast shown when the byte-identical cache prefix changed
+/// (shared profile updated, or a message deleted/regenerated), resetting the
+/// relay's cache for the affected history.
 private struct CacheResetBanner: View {
+
+    /// Why the cache was reset (drives the icon + text).
+    let reason: CacheResetNotice.Reason
 
     /// Dismiss action.
     let onDismiss: () -> Void
@@ -207,9 +211,9 @@ private struct CacheResetBanner: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "arrow.clockwise")
+            Image(systemName: reason == .historyEdited ? "trash" : "arrow.clockwise")
                 .foregroundStyle(.tint)
-            Text(L("cache.reset.profile"))
+            Text(L(reason == .historyEdited ? "cache.reset.history" : "cache.reset.profile"))
                 .font(.callout)
                 .lineLimit(3)
             Spacer(minLength: 0)
