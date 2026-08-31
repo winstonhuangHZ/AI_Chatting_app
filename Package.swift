@@ -21,6 +21,11 @@ let package = Package(
                 .product(name: "SwiftMath", package: "SwiftMath")
             ],
             path: "Sources/AIChatApp",
+            resources: [
+                // Bundled "Newsreader SC" fonts: Newsreader Latin glyphs merged
+                // with Songti SC CJK glyphs (see Sources/AIChatApp/Resources/Fonts).
+                .copy("Resources/Fonts")
+            ],
             linkerSettings: [
                 .linkedLibrary("sqlite3")
             ]

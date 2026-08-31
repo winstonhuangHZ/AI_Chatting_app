@@ -4,6 +4,18 @@
 <dict>
 	<key>files</key>
 	<dict>
+		<key>Resources/AIChatApp_AIChatApp.bundle/Fonts/NewsreaderSC-Bold.ttf</key>
+		<data>
+		jMPlUCCFCK8ROjxxTUtP9lq9BLs=
+		</data>
+		<key>Resources/AIChatApp_AIChatApp.bundle/Fonts/NewsreaderSC-Italic.ttf</key>
+		<data>
+		oWPQKooDA4gxzcSzas4XppuaslY=
+		</data>
+		<key>Resources/AIChatApp_AIChatApp.bundle/Fonts/NewsreaderSC-Regular.ttf</key>
+		<data>
+		dUsDTQPEJcuqY8Hiun8Evt5LJQo=
+		</data>
 		<key>Resources/AppIcon.icns</key>
 		<data>
 		TeyU3NtiHmXsNLJPQ32eFWcNzHE=
@@ -127,6 +139,27 @@
 	</dict>
 	<key>files2</key>
 	<dict>
+		<key>Resources/AIChatApp_AIChatApp.bundle/Fonts/NewsreaderSC-Bold.ttf</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			ZSvr6x7PfITpqCxFsHZWf547fer+/D0l5rNCgJ9ZhfU=
+			</data>
+		</dict>
+		<key>Resources/AIChatApp_AIChatApp.bundle/Fonts/NewsreaderSC-Italic.ttf</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			7yeiapBU0D9C4vCGi7/1ejafDc9LhKfKfWRIcU/LAPg=
+			</data>
+		</dict>
+		<key>Resources/AIChatApp_AIChatApp.bundle/Fonts/NewsreaderSC-Regular.ttf</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			N6jCJSq02BzuiVk1rwPA64fujcbKOKj7O+prycAYSxY=
+			</data>
+		</dict>
 		<key>Resources/AppIcon.icns</key>
 		<dict>
 			<key>hash2</key>

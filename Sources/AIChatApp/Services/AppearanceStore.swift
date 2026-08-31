@@ -53,8 +53,8 @@ enum FontPreset: String, CaseIterable, Identifiable {
     var uiFont: Font {
         switch self {
         case .serif:
-            // 衬线：优先经典衬线字体，中文回退系统衬线。
-            return .system(.body, design: .serif)
+            // 衬线：内置 Newsreader SC（Newsreader 拉丁 + 宋体中文字形）。
+            return .custom("Newsreader SC", size: 14)
         case .sans:
             return .system(.body, design: .default)
         case .mono:
@@ -65,7 +65,7 @@ enum FontPreset: String, CaseIterable, Identifiable {
     /// 设置在 SwiftUI Text 上的字体（供 MessageBubble/Markdown 使用）。
     var textFont: Font {
         switch self {
-        case .serif:  return .system(.body, design: .serif)
+        case .serif:  return .custom("Newsreader SC", size: 14)
         case .sans:   return .system(.body, design: .default)
         case .mono:   return .system(.body, design: .monospaced)
         }
@@ -73,12 +73,13 @@ enum FontPreset: String, CaseIterable, Identifiable {
 
     /// MarkdownUI 可用的字体族（按预设注入）。
     ///
-    /// serif 使用 `.system(.serif)` 而非 `.custom("ui-serif")`：custom 只映射
-    /// 拉丁字体（New York/Times），中文会回退到默认无衬线；system serif 设计
-    /// 会让系统自动为中文选择衬线字体（宋体 Songti SC），与用户消息一致。
+    /// serif 使用内置的 `Newsreader SC`（Newsreader 拉丁字形 + 宋体 Songti SC
+    /// 中文字形合并于同一字体文件，启动时注册；见 `BundledFonts`），因此
+    /// MarkdownUI 只需 `.custom("Newsreader SC")` 即可中英文同字体零回退。
+    /// sans/mono 继续用系统设计（分别对应无衬线 / 等宽，含中文回退）。
     var fontPropertiesFamily: FontProperties.Family {
         switch self {
-        case .serif:  return .system(.serif)
+        case .serif:  return .custom("Newsreader SC")
         case .sans:   return .system(.default)
         case .mono:   return .system(.monospaced)
         }
@@ -87,7 +88,7 @@ enum FontPreset: String, CaseIterable, Identifiable {
     /// 返回指定字号的 SwiftUI Font（供 Label/Text/TextField 等任何视图使用）。
     func font(size: CGFloat) -> Font {
         switch self {
-        case .serif:  return .system(size: size, design: .serif)
+        case .serif:  return .custom("Newsreader SC", size: size)
         case .sans:   return .system(size: size, design: .default)
         case .mono:   return .system(size: size, design: .monospaced)
         }
@@ -317,7 +318,7 @@ extension Text {
     /// 应用当前字体预设 + 字号到 Text。
     func appearanceFont(_ preset: FontPreset, size: CGFloat) -> Text {
         switch preset {
-        case .serif:  return self.font(.system(size: size, design: .serif))
+        case .serif:  return self.font(.custom("Newsreader SC", size: size))
         case .sans:   return self.font(.system(size: size, design: .default))
         case .mono:   return self.font(.system(size: size, design: .monospaced))
         }
