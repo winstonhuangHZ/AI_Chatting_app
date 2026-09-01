@@ -411,7 +411,6 @@ private struct MessageList: View {
                 // LazyVStack：只实体化视口附近的消息——真实对话里每条都是
                 // 重型 MarkdownUI 表格/标题/列表，VStack 会让全部消息每 tick
                 // 重渲染（实测 30 条 ≈ 21ms/tick vs LazyVStack ≈ 2ms/tick）。
-                // 滚动正确性由 .defaultScrollAnchor(.bottom) + 无动画 scrollTo 保证。
                 LazyVStack(spacing: 14) {
                     ForEach(session.messages) { message in
                         MessageBubble(
@@ -425,29 +424,19 @@ private struct MessageList: View {
                 }
                 .padding(16)
             }
-            // Anchor content growth at the bottom: streaming replies extend
-            // below the viewport instead of pushing the window "up"; the
-            // system re-anchors smoothly (macOS 14+ `.smooth` easing).
+            // 滚动完全交给 .defaultScrollAnchor(.bottom)：
+            //   - 首次/切会话 → 初始落在底部
+            //   - 追加新消息 / 流式长高 → 视口跟随真实内容底部
+            //   - 用户上翻阅读 → 尊重阅读位置，绝不拽回底部
+            // 任何手动 scrollTo 都会被 LazyVStack 的预估高度误导（预估 vs 真实
+            // 可差一倍），导致“飞到底部/显示空白/卡在下面”，所以全部去掉。
             .defaultScrollAnchor(.bottom)
-            // 最后一条消息 id 变化 = 新消息加入 / 删消息 / 切会话 → 滚到新底部。
-            // 用**无动画** scrollTo：带 withAnimation 的滚动会与 LazyVStack 的
-            // 预估高度竞态，导致“飞到底部空白/跳回若干条”。
-            .onChange(of: session.messages.last?.id) { _, newID in
-                if let newID {
-                    proxy.scrollTo(newID, anchor: .bottom)
-                }
-            }
             // 侧栏搜索跳转：居中 + 高亮（用户主动操作，允许动画）。
             .onChange(of: highlightMessageID) { _, newID in
                 if let newID {
                     withAnimation(.smooth(duration: 0.3)) {
                         proxy.scrollTo(newID, anchor: .center)
                     }
-                }
-            }
-            .onAppear {
-                if let id = session.messages.last?.id {
-                    proxy.scrollTo(id, anchor: .bottom)
                 }
             }
         }
