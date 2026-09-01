@@ -61,10 +61,10 @@ struct MarkdownText: View {
 
     var body: some View {
         Group {
-            if isPlainProse, let plain = plainAttributedText {
-                // 纯散文：单个 Text(AttributedString)，整条消息一个可选中整体。
-                Text(plain)
-                    .textSelection(.enabled)
+            if isPlainProse, let plain = plainAttributedString {
+                // 纯散文：NSTextView 渲染，整条消息一个可选中整体，
+                // 光标可跨段落拖选复制（SwiftUI Text 跨不了段）。
+                SelectableRichText(attributed: plain)
             } else {
                 markdownBody
             }
@@ -80,8 +80,8 @@ struct MarkdownText: View {
 
     // MARK: - Plain-prose path (cross-paragraph text selection)
 
-    /// `true` 时用单个 `Text(AttributedString)` 渲染：内容不含任何会被
-    /// `AttributedString(markdown:)` 错误处理的块级语法。
+    /// `true` 时用单个 `NSTextView` 渲染：内容不含任何 `PlainMarkdownBuilder`
+    /// 无法忠实还原的块级语法（代码围栏 / 表格 / LaTeX / 图片 / 分隔线）。
     private var isPlainProse: Bool {
         guard !text.isEmpty else { return true }
         // 含 LaTeX 数学（MathSegmenter 改写过的内容 != 原文）。
@@ -93,41 +93,26 @@ struct MarkdownText: View {
         for line in text.components(separatedBy: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { continue }
-            // 标题 / 引用块 / 表格 / 主题分隔线 → 回退 MarkdownUI。
-            if trimmed.hasPrefix("#") { return false }
-            if trimmed.hasPrefix(">") { return false }
+            // 表格行（一行 ≥2 个竖线）。
             if line.filter({ $0 == "|" }).count >= 2 { return false }
+            // 主题分隔线（整行 ≥3 个连字符）。
             if trimmed.filter({ $0 == "-" }).count >= 3
                 && trimmed.allSatisfy({ $0 == "-" }) { return false }
         }
         return true
     }
 
-    /// 纯散文路径的富文本：与界面字体预设 / 字号一致，行内代码用等宽小号字。
-    private var plainAttributedText: AttributedString? {
-        guard let parsed = try? AttributedString(
+    /// 纯散文路径的富文本：与界面字体预设 / 字号一致，行内代码等宽小号字，
+    /// 列表/标题/引用由 `PlainMarkdownBuilder` 显式渲染。
+    private var plainAttributedString: NSAttributedString? {
+        guard !text.isEmpty else { return nil }
+        let baseFont = appearance.fontPreset.nsFont(size: effectiveFontSize)
+        return PlainMarkdownBuilder.build(
             markdown: text,
-            options: .init(interpretedSyntax: .full)
-        ) else { return nil }
-
-        var result = parsed
-        let base = appearance.fontPreset.font(size: effectiveFontSize)
-        for run in result.runs {
-            var container = AttributeContainer()
-            let intent = run.inlinePresentationIntent
-            if intent?.contains(.code) == true {
-                container.font = .system(size: effectiveFontSize * 0.9,
-                                         design: .monospaced)
-                container.foregroundColor = inlineCodeTextColor
-            } else {
-                var font = base
-                if intent?.contains(.stronglyEmphasized) == true { font = font.bold() }
-                if intent?.contains(.emphasized) == true { font = font.italic() }
-                container.font = font
-            }
-            result[run.range].mergeAttributes(container)
-        }
-        return result
+            baseFont: baseFont,
+            codeColor: NSColor(inlineCodeTextColor),
+            quoteColor: .secondaryLabelColor
+        )
     }
 
     // MARK: - Rich markdown path (MarkdownUI)

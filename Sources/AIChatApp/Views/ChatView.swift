@@ -403,19 +403,15 @@ private struct MessageList: View {
     /// Message id to scroll to + highlight (jump from the sidebar search).
     let highlightMessageID: UUID?
 
-    /// 钉住的滚动锚点：等于最新消息 id。`scrollPosition(id:anchor:)` 会把这条
-    /// 消息持续钉在视口底部——追加新消息 / 流式长高都自动跟随，不再依赖一次性
-    /// 的 `scrollTo`（那条路径会被 LazyVStack 的预估高度误导而“飞到底部显示
-    /// 空白”）。用户手动上翻时绑定自动更新、钉住随之释放，不会把人拽回底部。
-
-    @State private var scrollID: UUID?
-
     // MARK: - Body
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 14) {
+                // 用普通 VStack 而非 LazyVStack：所有消息立即以真实高度布局，
+                // scrollTo 定位到的是确切位置，不会被预估高度误导而“飞到空白/跳
+                // 回若干条消息”。流式更新时只有最后一条在变，布局成本可控。
+                VStack(spacing: 14) {
                     ForEach(session.messages) { message in
                         MessageBubble(
                             message: message,
@@ -427,20 +423,20 @@ private struct MessageList: View {
                     }
                 }
                 .padding(16)
-                // 把最新消息钉在底部：追加新消息 / 流式长高都持续跟随，
-                // 不依赖一次性的 scrollTo（避免被 LazyVStack 预估高度误导
-                // 而“飞到底部显示空白”）。
-                .scrollPosition(id: $scrollID, anchor: .bottom)
             }
             // Anchor content growth at the bottom: streaming replies extend
             // below the viewport instead of pushing the window "up"; the
             // system re-anchors smoothly (macOS 14+ `.smooth` easing).
             .defaultScrollAnchor(.bottom)
-            // 最后一条消息 id 变化 = 新消息加入 / 删消息 / 切会话 → 重新钉住。
+            // 最后一条消息 id 变化 = 新消息加入 / 删消息 / 切会话 → 滚到新底部。
             .onChange(of: session.messages.last?.id) { _, newID in
-                scrollID = newID
+                if let newID {
+                    withAnimation(.smooth(duration: 0.25)) {
+                        proxy.scrollTo(newID, anchor: .bottom)
+                    }
+                }
             }
-            // 侧栏搜索跳转：仍用一次性滚动（居中 + 高亮）。
+            // 侧栏搜索跳转：居中 + 高亮。
             .onChange(of: highlightMessageID) { _, newID in
                 if let newID {
                     withAnimation(.smooth(duration: 0.3)) {
@@ -449,7 +445,11 @@ private struct MessageList: View {
                 }
             }
             .onAppear {
-                scrollID = session.messages.last?.id
+                if let id = session.messages.last?.id {
+                    withAnimation(.smooth(duration: 0.2)) {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
             }
         }
     }
