@@ -56,26 +56,23 @@ struct SelectableRichText: NSViewRepresentable {
     }
 
     /// 高度 = 文本在给定宽度下的实际布局高度（多段落、列表、标题都正确）。
+    ///
+    /// 复用 `nsView` 自己的布局管理器：`updateNSView` 已写入文本并触发布局，
+    /// 宽度不变时 `ensureLayout` 是缓存命中，避免每次新建 NSLayoutManager
+    /// 做全量排版（流式渲染时 layout 会被反复询问，这是卡顿来源之一）。
     func sizeThatFits(_ proposal: ProposedViewSize,
                       nsView: NSTextView,
                       context: Context) -> CGSize? {
         let width = proposal.width ?? nsView.frame.width
         guard width > 0 else { return nil }
-        let height = Self.measureHeight(attributed, width: width)
-        return CGSize(width: width, height: height)
-    }
-
-    static func measureHeight(_ attributed: NSAttributedString, width: CGFloat) -> CGFloat {
-        let textStorage = NSTextStorage(attributedString: attributed)
-        let layoutManager = NSLayoutManager()
-        textStorage.addLayoutManager(layoutManager)
-        let container = NSTextContainer(
-            size: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        nsView.textContainer?.containerSize = NSSize(
+            width: width,
+            height: CGFloat.greatestFiniteMagnitude
         )
-        container.lineFragmentPadding = 0
-        layoutManager.addTextContainer(container)
-        _ = layoutManager.glyphRange(for: container)
-        return ceil(layoutManager.usedRect(for: container).height) + 1
+        nsView.textContainer?.widthTracksTextView = true
+        nsView.layoutManager?.ensureLayout(for: nsView.textContainer!)
+        let height = ceil(nsView.layoutManager!.usedRect(for: nsView.textContainer!).height) + 1
+        return CGSize(width: width, height: height)
     }
 }
 

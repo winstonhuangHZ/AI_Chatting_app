@@ -104,15 +104,59 @@ struct MarkdownText: View {
 
     /// 纯散文路径的富文本：与界面字体预设 / 字号一致，行内代码等宽小号字，
     /// 列表/标题/引用由 `PlainMarkdownBuilder` 显式渲染。
+    ///
+    /// 构建成本高（逐行 + 行内解析），而流式渲染时整条消息列表的 body 每个
+    /// tick 都会重新求值——**必须缓存**：文本不变直接命中，避免每 tick 重建
+    /// 所有消息的富文本。缓存按文本建 key，命中后再校验字体/主题是否一致。
+    private static let plainCache: NSCache<NSString, CachedPlainText> = {
+        let cache = NSCache<NSString, CachedPlainText>()
+        cache.countLimit = 1500
+        return cache
+    }()
+
+    private static let rewriteCache: NSCache<NSString, NSString> = {
+        let cache = NSCache<NSString, NSString>()
+        cache.countLimit = 1500
+        return cache
+    }()
+
+    private final class CachedPlainText {
+        let attributed: NSAttributedString
+        let fontName: String
+        let pointSize: CGFloat
+        let claude: Bool
+        init(_ attributed: NSAttributedString, fontName: String, pointSize: CGFloat, claude: Bool) {
+            self.attributed = attributed
+            self.fontName = fontName
+            self.pointSize = pointSize
+            self.claude = claude
+        }
+    }
+
     private var plainAttributedString: NSAttributedString? {
         guard !text.isEmpty else { return nil }
         let baseFont = appearance.fontPreset.nsFont(size: effectiveFontSize)
-        return PlainMarkdownBuilder.build(
+        let isClaude = appearance.isClaudeTheme
+
+        if let cached = Self.plainCache.object(forKey: text as NSString),
+           cached.fontName == baseFont.fontName,
+           cached.pointSize == baseFont.pointSize,
+           cached.claude == isClaude {
+            return cached.attributed
+        }
+
+        let built = PlainMarkdownBuilder.build(
             markdown: text,
             baseFont: baseFont,
             codeColor: NSColor(inlineCodeTextColor),
             quoteColor: .secondaryLabelColor
         )
+        Self.plainCache.setObject(
+            CachedPlainText(built, fontName: baseFont.fontName,
+                            pointSize: baseFont.pointSize, claude: isClaude),
+            forKey: text as NSString
+        )
+        return built
     }
 
     // MARK: - Rich markdown path (MarkdownUI)
@@ -210,8 +254,15 @@ struct MarkdownText: View {
     }
 
     /// The markdown source with every LaTeX span swapped for a math image URL.
+    ///
+    /// 流式渲染时 body 反复求值，MathSegmenter 的全量扫描很贵——按文本缓存。
     private var rewrittenSource: String {
-        MathSegmenter.rewrite(text)
+        if let hit = Self.rewriteCache.object(forKey: text as NSString) {
+            return hit as String
+        }
+        let rewritten = MathSegmenter.rewrite(text)
+        Self.rewriteCache.setObject(rewritten as NSString, forKey: text as NSString)
+        return rewritten
     }
 
     /// 复制代码块并触发「整块高斯模糊 + 已复制气泡」反馈，1 秒后自动复原。
