@@ -10,8 +10,12 @@ import UniformTypeIdentifiers
 /// palette all come out exactly as rendered in the app, and the text stays
 /// **vector** (selectable / searchable in the PDF) rather than a screenshot.
 ///
-/// Pagination: the conversation is rendered as one tall view, then sliced into
-/// page-height bands by translating the CTM once per page.
+/// Pagination is **block-level**: the transcript is split into independent
+/// blocks (header / each message / footer), every block is measured and then
+/// placed WHOLE onto a page. Page breaks therefore only happen between
+/// messages — a line of text is never chopped mid-line by a fixed band cut
+/// (“腰斩”). Blocks taller than one page are expanded into page-height bands
+/// so no content is lost.
 @MainActor
 enum PDFExportService {
 
@@ -20,6 +24,9 @@ enum PDFExportService {
 
     /// Page margins in points.
     private static let margin: CGFloat = 40
+
+    /// Vertical gap between blocks (matches the in-document spacing look).
+    private static let blockGap: CGFloat = 14
 
     // MARK: - Public API
 
@@ -52,6 +59,15 @@ enum PDFExportService {
 
     // MARK: - Rendering
 
+    /// 一个可排版单元：一块内容（或超高块切出的一个页带）。
+    private struct PageUnit {
+        let block: TranscriptBlock
+        /// 本单元在页面上占用的可见高度。
+        let visibleHeight: CGFloat
+        /// 超高块页带相对块顶的下移量（普通块为 0）。
+        let bandShift: CGFloat
+    }
+
     /// Renders the session into PDF data.
     static func pdfData(
         session: ChatSession,
@@ -59,17 +75,66 @@ enum PDFExportService {
         localization: LocalizationManager
     ) throws -> Data {
         let contentWidth = pageSize.width - margin * 2
+        let usableHeight = pageSize.height - margin * 2
 
-        let document = TranscriptDocument(session: session)
-            .environmentObject(appearance)
-            .environmentObject(localization)
-            .frame(width: contentWidth)
-            // A light background keeps dark code cards readable on paper.
-            .background(Color.white)
+        let document = TranscriptDocument(
+            session: session,
+            appearance: appearance,
+            localization: localization
+        )
+        let blocks = document.blocks
 
-        let renderer = ImageRenderer(content: document)
-        renderer.proposedSize = ProposedViewSize(width: contentWidth, height: nil)
+        // 1) 逐块测量高度（只取布局尺寸，不取绘制闭包）。
+        var blockHeights: [CGFloat] = []
+        for block in blocks {
+            let view = block.makeView(session: session, appearance: appearance)
+                .environmentObject(appearance)
+                .frame(width: contentWidth)
+                .background(Color.white)
+            let renderer = ImageRenderer(content: view)
+            renderer.proposedSize = ProposedViewSize(width: contentWidth, height: nil)
+            renderer.render { size, _ in
+                blockHeights.append(max(0, size.height))
+            }
+        }
 
+        // 2) 展开超高块为页带，保证内容不丢失。
+        var units: [PageUnit] = []
+        for (index, height) in blockHeights.enumerated() {
+            let block = blocks[index]
+            if height > usableHeight {
+                let bandCount = Int(ceil(height / usableHeight))
+                for k in 0..<bandCount {
+                    units.append(PageUnit(
+                        block: block,
+                        visibleHeight: min(usableHeight, height - CGFloat(k) * usableHeight),
+                        bandShift: max(0, height - CGFloat(k + 1) * usableHeight)
+                    ))
+                }
+            } else {
+                units.append(PageUnit(block: block, visibleHeight: height, bandShift: 0))
+            }
+        }
+
+        // 3) 整块打包：当前页放不下就开新页。
+        var pages: [[PageUnit]] = []
+        var currentPage: [PageUnit] = []
+        var used: CGFloat = 0
+        for unit in units {
+            let slot = unit.visibleHeight + blockGap
+            if !currentPage.isEmpty && used + slot > usableHeight {
+                pages.append(currentPage)
+                currentPage = []
+                used = 0
+            }
+            currentPage.append(unit)
+            used += slot
+        }
+        if !currentPage.isEmpty {
+            pages.append(currentPage)
+        }
+
+        // 4) 逐页绘制。
         let output = NSMutableData()
         guard let consumer = CGDataConsumer(data: output) else {
             throw ExportError.contextCreationFailed
@@ -80,40 +145,46 @@ enum PDFExportService {
             throw ExportError.contextCreationFailed
         }
 
-        // `render` hands us the measured content size plus a closure that draws
-        // the whole view into a CGContext. The renderer already emits upright
-        // content occupying (0,0)–(width,height) in the PDF's y-up space, so we
-        // must NOT flip the CTM (doing so renders everything upside down) — we
-        // only translate so that the wanted band lands in the page's text area.
-        renderer.render { size, drawInContext in
-            let usableHeight = pageSize.height - margin * 2
-            let pageCount = max(1, Int(ceil(size.height / usableHeight)))
+        for page in pages {
+            context.beginPDFPage(nil)
+            context.saveGState()
 
-            for pageIndex in 0..<pageCount {
-                context.beginPDFPage(nil)
-                context.saveGState()
+            // 先裁切到文本区，内容不会溢进页边距。
+            context.clip(to: CGRect(
+                x: margin,
+                y: margin,
+                width: contentWidth,
+                height: usableHeight
+            ))
 
-                // Clip first, while the CTM is still page space, so content can
-                // never bleed into the margins.
-                context.clip(to: CGRect(
-                    x: margin,
-                    y: margin,
-                    width: contentWidth,
-                    height: usableHeight
-                ))
 
-                // Align the top of band `pageIndex` with the top of the text
-                // area. Content top sits at y = size.height, and band N starts
-                // `N * usableHeight` below the content top.
-                let dy = margin + usableHeight - size.height
-                    + CGFloat(pageIndex) * usableHeight
-                context.translateBy(x: margin, y: dy)
-
-                drawInContext(context)
-
-                context.restoreGState()
-                context.endPDFPage()
+            // 块在内容区自上而下摆放；每块独立渲染（向量文字），
+            // 平移 CTM 把块放进自己的槽位（超高页带额外下移对齐）。
+            var y: CGFloat = 0
+            for unit in page {
+                let blockView = unit.block.makeView(session: session, appearance: appearance)
+                    .environmentObject(appearance)
+                    .frame(width: contentWidth)
+                    .background(Color.white)
+                let renderer = ImageRenderer(content: blockView)
+                renderer.proposedSize = ProposedViewSize(width: contentWidth, height: nil)
+                renderer.render { _, drawInContext in
+                    context.saveGState()
+                    context.translateBy(
+                        x: margin,
+                        y: margin + usableHeight - y - unit.visibleHeight
+                    )
+                    if unit.bandShift > 0 {
+                        context.translateBy(x: 0, y: -unit.bandShift)
+                    }
+                    drawInContext(context)
+                    context.restoreGState()
+                }
+                y += unit.visibleHeight + blockGap
             }
+
+            context.restoreGState()
+            context.endPDFPage()
         }
 
         context.closePDF()
@@ -125,7 +196,7 @@ enum PDFExportService {
     /// Strips characters that are illegal (or annoying) in filenames.
     private static func safeFilename(_ title: String) -> String {
         let cleaned = title
-            .components(separatedBy: CharacterSet(charactersIn: "/\\:?%*|\"<>\n\r\t"))
+            .components(separatedBy: CharacterSet(charactersIn: "/\\:?%*|\"<>\\n\\r\\t"))
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmed = cleaned.isEmpty ? "AIChat" : String(cleaned.prefix(60))
@@ -144,3 +215,4 @@ enum PDFExportService {
         }
     }
 }
+
