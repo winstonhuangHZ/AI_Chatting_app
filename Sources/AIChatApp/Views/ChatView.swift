@@ -21,9 +21,6 @@ struct ChatView: View {
     /// 界面本地化——语言切换时即时刷新全部文本。
     @EnvironmentObject private var localization: LocalizationManager
 
-    /// Scroll to the latest message when content updates.
-    @State private var lastMessageID: UUID?
-
     /// 拖拽上传中转桥（消息列表区 drop → 输入栏待发送附件）。
     @StateObject private var dropRouter = ChatDropRouter()
 
@@ -43,8 +40,7 @@ struct ChatView: View {
                     session: session,
                     streamingMessageID: chatViewModel.streamingAssistantID,
                     hasReceivedFirstToken: chatViewModel.hasReceivedFirstToken,
-                    highlightMessageID: chatViewModel.highlightMessageID,
-                    lastMessageID: $lastMessageID
+                    highlightMessageID: chatViewModel.highlightMessageID
                 )
             } else {
                 ContentUnavailableView(
@@ -107,12 +103,6 @@ struct ChatView: View {
                             .background(appearance.accentColor.opacity(0.18))
                             .clipShape(Capsule())
                     }
-            }
-        }
-        .onReceive(chatViewModel.$sessions) { sessions in
-            if let activeID = chatViewModel.activeSessionID,
-               let session = sessions.first(where: { $0.id == activeID }) {
-                lastMessageID = session.messages.last?.id
             }
         }
         // Memory-change toast (auto-dismisses after 4s).
@@ -413,8 +403,12 @@ private struct MessageList: View {
     /// Message id to scroll to + highlight (jump from the sidebar search).
     let highlightMessageID: UUID?
 
-    /// Binding updated to the newest message id (drives autoscroll).
-    @Binding var lastMessageID: UUID?
+    /// 钉住的滚动锚点：等于最新消息 id。`scrollPosition(id:anchor:)` 会把这条
+    /// 消息持续钉在视口底部——追加新消息 / 流式长高都自动跟随，不再依赖一次性
+    /// 的 `scrollTo`（那条路径会被 LazyVStack 的预估高度误导而“飞到底部显示
+    /// 空白”）。用户手动上翻时绑定自动更新、钉住随之释放，不会把人拽回底部。
+
+    @State private var scrollID: UUID?
 
     // MARK: - Body
 
@@ -433,18 +427,20 @@ private struct MessageList: View {
                     }
                 }
                 .padding(16)
+                // 把最新消息钉在底部：追加新消息 / 流式长高都持续跟随，
+                // 不依赖一次性的 scrollTo（避免被 LazyVStack 预估高度误导
+                // 而“飞到底部显示空白”）。
+                .scrollPosition(id: $scrollID, anchor: .bottom)
             }
             // Anchor content growth at the bottom: streaming replies extend
             // below the viewport instead of pushing the window "up"; the
             // system re-anchors smoothly (macOS 14+ `.smooth` easing).
             .defaultScrollAnchor(.bottom)
-            .onChange(of: lastMessageID) { _, newID in
-                if let newID {
-                    withAnimation(.smooth(duration: 0.25)) {
-                        proxy.scrollTo(newID, anchor: .bottom)
-                    }
-                }
+            // 最后一条消息 id 变化 = 新消息加入 / 删消息 / 切会话 → 重新钉住。
+            .onChange(of: session.messages.last?.id) { _, newID in
+                scrollID = newID
             }
+            // 侧栏搜索跳转：仍用一次性滚动（居中 + 高亮）。
             .onChange(of: highlightMessageID) { _, newID in
                 if let newID {
                     withAnimation(.smooth(duration: 0.3)) {
@@ -453,11 +449,7 @@ private struct MessageList: View {
                 }
             }
             .onAppear {
-                if let id = session.messages.last?.id {
-                    withAnimation(.smooth(duration: 0.2)) {
-                        proxy.scrollTo(id, anchor: .bottom)
-                    }
-                }
+                scrollID = session.messages.last?.id
             }
         }
     }
