@@ -41,8 +41,16 @@ struct BuiltinTool {
 /// Registry + execution for the built-in tools offered to the model.
 enum ChatTools {
 
+    /// 由 ChatViewModel 注入的处理函数：应用 AI 在第一轮对话为会话挑选的
+    /// emoji 和标题。工具在后台线程执行，通过 `MainActor.run` 跳回主线程调用。
+    @MainActor static var sessionMetadataSink: ((String, String) -> Void)?
+
     /// The base tool set sent on every agent-mode (tool-enabled) request.
-    static let all: [BuiltinTool] = [getTime, calc, webSearch, webFetch, weather]
+    ///
+    /// `set_session_metadata` 常驻注册表（保证 `execute` 能解析到它），但
+    /// 是否**广告**给模型由 `set(latexEnabled:includeSessionMetadata:)`
+    /// 控制——只在第一轮对话提供。
+    static let all: [BuiltinTool] = [getTime, calc, webSearch, webFetch, weather, setSessionMetadata]
 
     /// The full lookup registry: `all` plus the environment-gated
     /// `compile_latex` when a TeX toolchain exists. Used by `execute` /
@@ -63,13 +71,51 @@ enum ChatTools {
     /// must be on AND a TeX engine must exist. When either is false the tool is
     /// not registered at all, so the model never offers a capability the machine
     /// cannot honour.
-    static func set(latexEnabled: Bool) -> [BuiltinTool] {
-        var tools = all
+    ///
+    /// `includeSessionMetadata` is `true` only for the FIRST exchange of a new
+    /// conversation: that's the only time the model is allowed to pick the
+    /// conversation's emoji + title. Later rounds omit the tool so the model
+    /// never rewrites the identity mid-conversation.
+    static func set(latexEnabled: Bool, includeSessionMetadata: Bool = false) -> [BuiltinTool] {
+        var tools = all.filter { includeSessionMetadata || $0.name != "set_session_metadata" }
         if latexEnabled && LaTeXService.isAvailable {
             tools.append(compileLaTeX)
         }
         return tools
     }
+
+    // MARK: - set_session_metadata
+
+    /// First-round-only tool: lets the AI choose the conversation's emoji and
+    /// short title, which the sidebar then shows. Kept in the registry so a
+    /// (first-round) call always resolves; the sink applies the values to the
+    /// active session on the main actor.
+    static let setSessionMetadata = BuiltinTool(
+        name: "set_session_metadata",
+        description: """
+        Call this tool exactly ONCE, at the start of the very FIRST exchange of a brand-new \
+        conversation, to give the conversation an identity. Choose a concise title (no more than \
+        24 characters, in the user's language, summarizing what they asked about) and ONE emoji \
+        that best captures the topic. Never call it again in later turns.
+        """,
+        parameters: [
+            "type": "object",
+            "properties": [
+                "title": ["type": "string", "description": "短标题，≤24字，概括用户第一个问题的主题"],
+                "emoji": ["type": "string", "description": "最能代表本对话主题的单个 emoji（如 📚 🧠 💻 🎨 🍜 ⚖️ 🔬 🎬）"],
+            ],
+            "required": ["title", "emoji"],
+        ],
+        execute: { arguments in
+            let title = (arguments["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let emoji = (arguments["emoji"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !title.isEmpty else { return "Error: title must not be empty." }
+            await MainActor.run {
+                ChatTools.sessionMetadataSink?(emoji, title)
+            }
+            return "已为对话设置标题“\(title)”、emoji“\(emoji.isEmpty ? "（无）" : emoji)”。"
+        }
+    )
 
     // MARK: - compile_latex
 

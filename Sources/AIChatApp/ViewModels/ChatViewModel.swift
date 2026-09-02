@@ -296,6 +296,13 @@ final class ChatViewModel: ObservableObject {
         self.sessions = sessionStore.sessions
         self.activeSessionID = sessionStore.activeSessionID
 
+        // 第一轮对话的 AI 通过 set_session_metadata 工具挑选会话 emoji/标题。
+        // 全局 sink：工具在后台线程执行，跳回主线程后应用到当前活动会话。
+        ChatTools.sessionMetadataSink = { [weak self] emoji, title in
+            guard let self, let sessionID = self.activeSessionID else { return }
+            self.sessionStore.updateSessionMetadata(emoji: emoji, title: title, in: sessionID)
+        }
+
         // Mirror store changes into this VM (one-way: store → VM).
         sessionStore.$sessions.sink { [weak self] newSessions in
             self?.sessions = newSessions
@@ -510,9 +517,17 @@ final class ChatViewModel: ObservableObject {
                 // "timestamp" toggle is on (cache-safe: tool results are never
                 // persisted, so the request prefix stays byte-identical).
                 if configForRequest.toolsEnabled || configForRequest.includeTimestamp {
+                    // 第一轮对话：历史里还没有任何 assistant 回复。此时才把
+                    // set_session_metadata 广告给模型，让 AI 挑选会话 emoji/标题。
+                    let isFirstRound = history.filter { $0.role == .assistant }.isEmpty
                     let toolSet: [BuiltinTool]? = configForRequest.toolsEnabled
-                        ? ChatTools.set(latexEnabled: configForRequest.latexEnabled)
-                        : [ChatTools.getTime]
+                        ? ChatTools.set(
+                            latexEnabled: configForRequest.latexEnabled,
+                            includeSessionMetadata: isFirstRound
+                        )
+                        : (isFirstRound
+                            ? [ChatTools.getTime, ChatTools.setSessionMetadata]
+                            : [ChatTools.getTime])
                     let stream = try await service.streamChatWithTools(
                         config: configForRequest,
                         model: modelForRequest,

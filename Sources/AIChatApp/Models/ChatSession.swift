@@ -9,6 +9,12 @@ struct ChatSession: Identifiable, Codable, Hashable {
     /// Display title shown in the sidebar.
     var title: String
 
+    /// AI-chosen emoji shown before the title in the sidebar.
+    ///
+    /// Optional so sessions persisted before this field existed still decode
+    /// (synthesized Codable uses `decodeIfPresent` for optionals).
+    var emoji: String?
+
     /// All messages in chronological order.
     var messages: [ChatMessage]
 
@@ -20,11 +26,13 @@ struct ChatSession: Identifiable, Codable, Hashable {
     init(
         id: UUID = UUID(),
         title: String = "New Chat",
+        emoji: String? = nil,
         messages: [ChatMessage] = [],
         createdAt: Date = Date()
     ) {
         self.id = id
         self.title = title
+        self.emoji = emoji
         self.messages = messages
         self.createdAt = createdAt
     }

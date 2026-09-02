@@ -108,6 +108,18 @@ final class SessionStore: ObservableObject {
         sessions[index].autoTitle()
     }
 
+    /// Applies AI-chosen session metadata (first-round `set_session_metadata`
+    /// tool): a short title and/or an emoji shown in the sidebar.
+    func updateSessionMetadata(emoji: String?, title: String?, in sessionID: UUID) {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+        if let emoji, !emoji.isEmpty {
+            sessions[index].emoji = emoji
+        }
+        if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sessions[index].title = title
+        }
+    }
+
     /// Updates the content of the last assistant message in a session.
     ///
     /// Used by the streaming pipeline to accumulate deltas into the

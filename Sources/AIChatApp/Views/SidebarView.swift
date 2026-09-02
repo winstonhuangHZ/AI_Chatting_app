@@ -204,11 +204,17 @@ private struct SidebarRow: View {
     var body: some View {
         Button(action: onSelect) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(session.title)
-                    .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .foregroundStyle(isSelected ? appearance.accentColor : Color.primary)
+                HStack(spacing: 4) {
+                    if let emoji = session.emoji, !emoji.isEmpty {
+                        Text(emoji)
+                            .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
+                    }
+                    Text(session.title)
+                        .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .foregroundStyle(isSelected ? appearance.accentColor : Color.primary)
+                }
 
                 HStack(spacing: 4) {
                     Text(session.createdAt, style: .relative)

@@ -388,6 +388,18 @@ private struct TopBarView: View {
 
 // MARK: - Message list
 
+/// 消息列表底部哨兵的位置（滚动坐标系内 maxY）：内容底边到视口顶部的距离。
+private struct MessageListBottomEdgeKey: PreferenceKey {
+    static var defaultValue: CGFloat = .infinity
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// 消息列表滚动视口高度。
+private struct MessageListViewportHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 /// Scrollable list of messages with smooth autocroll during streaming.
 private struct MessageList: View {
 
@@ -403,34 +415,74 @@ private struct MessageList: View {
     /// Message id to scroll to + highlight (jump from the sidebar search).
     let highlightMessageID: UUID?
 
+    /// 底部哨兵在滚动坐标系中的 maxY（内容底边到视口顶部的距离）。
+    @State private var bottomEdgeY: CGFloat = .infinity
+
+    /// 聊天滚动视口高度。
+    @State private var viewportHeight: CGFloat = 0
+
     // MARK: - Body
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // LazyVStack：只实体化视口附近的消息——真实对话里每条都是
-                // 重型 MarkdownUI 表格/标题/列表，VStack 会让全部消息每 tick
-                // 重渲染（实测 30 条 ≈ 21ms/tick vs LazyVStack ≈ 2ms/tick）。
-                LazyVStack(spacing: 14) {
-                    ForEach(session.messages) { message in
-                        MessageBubble(
-                            message: message,
-                            isStreaming: message.id == streamingMessageID,
-                            hasReceivedFirstToken: hasReceivedFirstToken,
-                            isHighlighted: message.id == highlightMessageID
-                        )
-                        .id(message.id)
+                // 外层 VStack：底部哨兵必须放在 LazyVStack **之外** —— 实测
+                // LazyVStack 内任何额外子项都会在滚动时被惰性卸载/重挂载，
+                // 干扰 defaultScrollAnchor 的定位（上翻会停在中途、卡住）。
+                VStack(spacing: 0) {
+                    // LazyVStack：只实体化视口附近的消息——真实对话里每条都是
+                    // 重型 MarkdownUI 表格/标题/列表，VStack 会让全部消息每 tick
+                    // 重渲染（实测 30 条 ≈ 21ms/tick vs LazyVStack ≈ 2ms/tick）。
+                    LazyVStack(spacing: 14) {
+                        ForEach(session.messages) { message in
+                            MessageBubble(
+                                message: message,
+                                isStreaming: message.id == streamingMessageID,
+                                hasReceivedFirstToken: hasReceivedFirstToken,
+                                isHighlighted: message.id == highlightMessageID
+                            )
+                            .id(message.id)
+                        }
                     }
+                    .padding(16)
+                    // 底部哨兵：精确测量内容底边位置，用于“发送时保持阅读位置”。
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: MessageListBottomEdgeKey.self,
+                            value: geo.frame(in: .named("chatScroll")).maxY
+                        )
+                    }
+                    .frame(height: 0)
                 }
-                .padding(16)
             }
-            // 滚动完全交给 .defaultScrollAnchor(.bottom)：
+            .coordinateSpace(name: "chatScroll")
+            // 滚动正确性交给 .defaultScrollAnchor(.bottom)：
             //   - 首次/切会话 → 初始落在底部
-            //   - 追加新消息 / 流式长高 → 视口跟随真实内容底部
+            //   - 流式长高 → 视口跟随真实内容底部
             //   - 用户上翻阅读 → 尊重阅读位置，绝不拽回底部
-            // 任何手动 scrollTo 都会被 LazyVStack 的预估高度误导（预估 vs 真实
-            // 可差一倍），导致“飞到底部/显示空白/卡在下面”，所以全部去掉。
             .defaultScrollAnchor(.bottom)
+            .overlay(alignment: .bottom) {
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: MessageListViewportHeightKey.self,
+                        value: geo.size.height
+                    )
+                }
+            }
+            .onPreferenceChange(MessageListBottomEdgeKey.self) { bottomEdgeY = $0 }
+            .onPreferenceChange(MessageListViewportHeightKey.self) { viewportHeight = $0 }
+            .onChange(of: session.messages.last?.id) { oldID, _ in
+                // 发送新消息时“保持阅读位置，绝不拽走”：
+                // append 后 anchor 会把视口拽到新底部；若底部哨兵显示视口
+                // 确实在底部（发送前用户就停在底部），就把视口钉回发送前的
+                // 最后一条消息（oldID），精确还原阅读位置。上翻时 anchor 不
+                // 拽 → 哨兵不在底部 → 什么都不做，视口纹丝不动。
+                if let oldID,
+                   bottomEdgeY <= viewportHeight + 4,
+                   session.messages.contains(where: { $0.id == oldID }) {
+                    proxy.scrollTo(oldID, anchor: .bottom)
+                }
+            }
             // 侧栏搜索跳转：居中 + 高亮（用户主动操作，允许动画）。
             .onChange(of: highlightMessageID) { _, newID in
                 if let newID {
