@@ -45,12 +45,22 @@ enum ChatTools {
     /// emoji 和标题。工具在后台线程执行，通过 `MainActor.run` 跳回主线程调用。
     @MainActor static var sessionMetadataSink: ((String, String) -> Void)?
 
+    /// 由 ChatViewModel 注入的个性化块解析器：按名字返回个性化块内容，未找到返回 nil。
+    /// 供 `fetch_personalization_block` 工具在主线程查询 PersonalizationStore。
+    @MainActor static var personalizationResolver: ((String) -> String?)?
+
+    /// 返回全部个性化块名字（用于“未找到时的可用列表”提示）。
+    @MainActor static var personalizationNames: (() -> [String])?
+
     /// The base tool set sent on every agent-mode (tool-enabled) request.
     ///
-    /// `set_session_metadata` 常驻注册表（保证 `execute` 能解析到它），但
-    /// 是否**广告**给模型由 `set(latexEnabled:includeSessionMetadata:)`
-    /// 控制——只在第一轮对话提供。
-    static let all: [BuiltinTool] = [getTime, calc, webSearch, webFetch, weather, setSessionMetadata]
+    /// `set_session_metadata` / `fetch_personalization_block` 常驻注册表（保证
+    /// `execute` 能解析到它们），但是否**广告**给模型由
+    /// `set(latexEnabled:includeSessionMetadata:includeKnowledge:)` 控制。
+    static let all: [BuiltinTool] = [
+        getTime, calc, webSearch, webFetch, weather,
+        setSessionMetadata, fetchPersonalizationBlock,
+    ]
 
     /// The full lookup registry: `all` plus the environment-gated
     /// `compile_latex` when a TeX toolchain exists. Used by `execute` /
@@ -76,8 +86,18 @@ enum ChatTools {
     /// conversation: that's the only time the model is allowed to pick the
     /// conversation's emoji + title. Later rounds omit the tool so the model
     /// never rewrites the identity mid-conversation.
-    static func set(latexEnabled: Bool, includeSessionMetadata: Bool = false) -> [BuiltinTool] {
-        var tools = all.filter { includeSessionMetadata || $0.name != "set_session_metadata" }
+    ///
+    /// `includeKnowledge` is `true` whenever at least one personalization block exists:
+    /// that's when `fetch_personalization_block` is useful.
+    static func set(
+        latexEnabled: Bool,
+        includeSessionMetadata: Bool = false,
+        includeKnowledge: Bool = false
+    ) -> [BuiltinTool] {
+        var tools = all.filter {
+            ($0.name != "set_session_metadata" || includeSessionMetadata)
+                && ($0.name != "fetch_personalization_block" || includeKnowledge)
+        }
         if latexEnabled && LaTeXService.isAvailable {
             tools.append(compileLaTeX)
         }
@@ -114,6 +134,40 @@ enum ChatTools {
                 ChatTools.sessionMetadataSink?(emoji, title)
             }
             return "已为对话设置标题“\(title)”、emoji“\(emoji.isEmpty ? "（无）" : emoji)”。"
+        }
+    )
+
+    // MARK: - fetch_personalization_block
+
+    /// Reads a stored personalization block by exact name. Advertised whenever the user
+    /// has saved at least one block, so normal chats can pull the saved facts on
+    /// demand. Execution resolves through the injected `personalizationResolver`.
+    static let fetchPersonalizationBlock = BuiltinTool(
+        name: "fetch_personalization_block",
+        description: """
+        Retrieve the full stored content of a personalization block by its EXACT name. Knowledge blocks \
+        hold durable facts the user explicitly saved (e.g. account & personal info, team constants, \
+        a project spec, a checklist). Call this tool whenever the user refers to something that \
+        might live in a saved personalization block, or when a detail about the user/org isn't available \
+        in this conversation. Pass the exact block name — if it doesn't exist the tool lists the \
+        available names so you can retry. Never invent a block name or its content.
+        """,
+        parameters: [
+            "type": "object",
+            "properties": [
+                "name": ["type": "string", "description": "个性化块的名字（必须与创建时完全一致，区分大小写）"],
+            ],
+            "required": ["name"],
+        ],
+        execute: { arguments in
+            let name = (arguments["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !name.isEmpty else { return "Error: name must not be empty." }
+            let content = await MainActor.run { ChatTools.personalizationResolver?(name) }
+            if let content, !content.isEmpty {
+                return "个性化块「\(name)」内容如下：\n\n\(content)"
+            }
+            let names = await MainActor.run { ChatTools.personalizationNames?() } ?? []
+            return "没有找到个性化块「\(name)」。可用个性化块：\(names.isEmpty ? "（无）" : names.joined(separator: "、"))"
         }
     )
 

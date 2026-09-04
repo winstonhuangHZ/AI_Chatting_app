@@ -27,7 +27,68 @@ struct ChatView: View {
     /// 拖拽文件悬停在聊天面板上时高亮。
     @State private var isDropTargeted = false
 
+    /// 「生成个性化块」弹窗状态。
+    @State private var showGenerateBlock = false
+
+    /// 生成时用户输入的知识块名字。
+    @State private var blockName = ""
+
     // MARK: - Body
+
+    /// 个性化块采集会话顶部操作栏：提示 + 「生成个性化块」。
+    private var personalizationBar: some View {
+        HStack(spacing: 8) {
+            Label(L("kb.collecting"), systemImage: "brain")
+                .font(appearance.fontPreset.font(size: appearance.pointSize - 1))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                blockName = chatViewModel.activeSession?.title ?? ""
+                showGenerateBlock = true
+            } label: {
+                Label(L("kb.generate"), systemImage: "square.and.arrow.down.on.square")
+                    .font(appearance.fontPreset.font(size: appearance.pointSize))
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(appearance.accentColor)
+            .controlSize(.small)
+            .disabled(chatViewModel.activeSession?.messages.isEmpty == true)
+            .help(L("kb.generate.help"))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+    }
+
+    /// 从拖放提供的 NSItemProvider 异步读取文件 URL。Finder 拖出的文件以
+    /// `public.file-url` 提供，需处理 item 为 URL / NSURL / Data(URL 字符串) 三种形态。
+    private static func loadDroppedFileURLs(
+        _ providers: [NSItemProvider],
+        completion: @escaping ([URL]) -> Void
+    ) {
+        guard !providers.isEmpty else { completion([]); return }
+        var urls: [URL] = []
+        let lock = NSLock()
+        var remaining = providers.count
+        for provider in providers {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+                lock.lock()
+                if let url = item as? URL {
+                    urls.append(url)
+                } else if let nsurl = item as? NSURL {
+                    urls.append(nsurl as URL)
+                } else if let data = item as? Data,
+                          let s = String(data: data, encoding: .utf8),
+                          let url = URL(string: s) {
+                    urls.append(url)
+                }
+                remaining -= 1
+                let done = remaining == 0
+                lock.unlock()
+                if done { completion(urls) }
+            }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,6 +112,12 @@ struct ChatView: View {
             }
 
             Divider()
+
+            // 个性化块采集会话：顶部提示 + 「生成个性化块」按钮。
+            if chatViewModel.activeSession?.isPersonalizationCollection == true {
+                personalizationBar
+                Divider()
+            }
 
             // Live token counter + cost estimate for the *next* request —
             // includes history + system prompt + user profile (all re-sent).
@@ -77,17 +144,35 @@ struct ChatView: View {
                 isStreaming: chatViewModel.isStreaming,
                 dropRouter: dropRouter
             )
+            // 「生成个性化块」：输入名字后把采集会话整理成命名个性化块。
+            .alert(L("kb.generate"), isPresented: $showGenerateBlock) {
+                TextField(L("kb.name"), text: $blockName)
+                Button(L("kb.generate.action")) {
+                    if let session = chatViewModel.activeSession {
+                        chatViewModel.generatePersonalizationBlock(from: session, name: blockName)
+                    }
+                }
+                Button(L("cancel"), role: .cancel) {}
+            } message: {
+                Text(L("kb.generate.message"))
+            }
         }
         .background(appearance.chatBackground)
         // 拖拽上传：整个聊天面板都是 drop 目标，转发给输入栏挂载的 handler。
-        .dropDestination(for: URL.self) { urls, _ in
-            dropRouter.onDrop?(urls)
-            return true
-        } isTargeted: { targeted in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isDropTargeted = targeted
+        // 用 `onDrop(of: [.fileURL])` 而非 `dropDestination(for: URL.self)`：后者对
+        // Finder 拖出的文件（public.file-url）支持不稳，经常收不到文件 URL。
+        .onDrop(
+            of: [UTType.fileURL.identifier],
+            isTargeted: $isDropTargeted,
+            perform: { (providers: [NSItemProvider]) -> Bool in
+                Self.loadDroppedFileURLs(providers) { urls in
+                    if !urls.isEmpty {
+                        DispatchQueue.main.async { dropRouter.onDrop?(urls) }
+                    }
+                }
+                return true
             }
-        }
+        )
         // 拖拽悬停提示：虚线框 + 「松手附加」胶囊。
         .overlay {
             if isDropTargeted {
@@ -1528,22 +1613,33 @@ private final class EditorTextView: NSTextView {
         super.paste(sender)
     }
 
-    /// 从通用剪贴板提取图片：优先 png/tiff 数据，其次 Finder 复制的图片
-    /// 文件 URL（读文件内容）。返回 `(数据, MIME)`。
+    /// 从通用剪贴板提取图片：优先 png/tiff 数据，其次任意 NSImage 对象（转 PNG），
+    /// 再其次是 Finder 复制的图片文件 URL（读文件内容）。返回 `(数据, MIME)`。
     static func clipboardImage() -> (Data, String)? {
         let pb = NSPasteboard.general
+        // 1) 直接有 PNG / TIFF 数据（macOS 截图一般这两种）。
         if let data = pb.data(forType: .png) {
             return (data, "image/png")
         }
         if let data = pb.data(forType: .tiff) {
             return (data, "image/tiff")
         }
+        // 2) Finder 里复制的图片文件 URL → 读文件内容。
         if let urlString = pb.string(forType: .fileURL),
            let url = URL(string: urlString),
            let uti = UTType(filenameExtension: url.pathExtension),
            uti.conforms(to: .image),
            let data = try? Data(contentsOf: url) {
             return (data, uti.preferredMIMEType ?? "image/png")
+        }
+        // 3) 任意 NSImage 对象 → 转 PNG（覆盖其它剪贴板图片格式）。
+        if let image = pb.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage,
+           let tiff = image.tiffRepresentation,
+           let rep = NSBitmapImageRep(data: tiff) {
+            if let png = rep.representation(using: .png, properties: [:]) {
+                return (png, "image/png")
+            }
+            return (tiff, "image/tiff")
         }
         return nil
     }

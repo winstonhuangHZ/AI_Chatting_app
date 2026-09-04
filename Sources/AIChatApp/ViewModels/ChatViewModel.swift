@@ -80,10 +80,17 @@ final class ChatViewModel: ObservableObject {
     /// Persisted user profile (learned preferences) sent alongside the prompt.
     let userProfileStore: UserProfileStore
 
+    /// Persists personalization blocks (named facts the model can fetch via the
+    /// `fetch_personalization_block` tool).
+    let personalizationStore: PersonalizationStore
+
     // MARK: - Published state
 
     /// All sessions (delegated to the shared store).
     @Published var sessions: [ChatSession] = []
+
+    /// All personalization blocks (mirrored from `personalizationStore` for the sidebar UI).
+    @Published var personalizationBlocks: [PersonalizationBlock] = []
 
     /// The selected session id (single source of truth; sidebar reads this).
     @Published var activeSessionID: UUID?
@@ -192,7 +199,24 @@ final class ChatViewModel: ObservableObject {
     /// (no timestamp, no profile JSON), so the relay's prompt-cache prefix is
     /// maximized. Dynamic context (current time + user profile) is appended as
     /// a separate trailing system message by `buildContextMessage`.
-    private func buildSystemPrompt(for config: APIServerConfig) -> String {
+    /// 知识采集会话专用 system prompt：让模型以访谈方式收集用户信息，
+    /// 以便用户随后点「生成个性化块」把对话整理成命名个性化块。
+    private static let personalizationCollectionPrompt = """
+    You are a focused knowledge-collector. The user is building a reusable "personalization block" about \
+    a specific topic (for example their account / personal details, team facts, a project spec, a \
+    checklist). Do NOT wander into off-topic answers. Instead:
+    1. Ask clear, targeted questions to collect the facts completely and precisely.
+    2. Restate / organise what the user tells you so it stays accurate and reusable.
+    3. When the topic appears covered, give a short structured summary of everything collected.
+    Keep replies concise and interview-like (Chinese unless the user writes another language).
+    """
+
+    private func buildSystemPrompt(for config: APIServerConfig, personalizationCollection: Bool = false) -> String {
+        // 知识采集会话：用采集专用 prompt，不叠加普通 personalization 指令。
+        if personalizationCollection {
+            return Self.personalizationCollectionPrompt
+        }
+
         var prompt = config.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if prompt.isEmpty {
             prompt = APIServerConfig.defaultSystemPrompt
@@ -261,7 +285,9 @@ final class ChatViewModel: ObservableObject {
     /// caching is unaffected by profile edits.
     ///
     /// Returns `nil` when there is no profile data to send.
-    private func buildContextMessage(for config: APIServerConfig) -> ChatMessage? {
+    private func buildContextMessage(for config: APIServerConfig, personalizationCollection: Bool = false) -> ChatMessage? {
+        // 知识采集会话：不注入用户个人偏好，避免干扰收集、也避免误写 profile。
+        guard !personalizationCollection else { return nil }
         guard let profileJSON = userProfileStore.jsonPayload else { return nil }
         return .system("""
         KNOWLEDGE ABOUT THE USER (use it to personalize your reply):
@@ -286,21 +312,33 @@ final class ChatViewModel: ObservableObject {
         sessionStore: SessionStore,
         configStore: ConfigStore,
         service: OpenAIService,
-        userProfileStore: UserProfileStore = UserProfileStore()
+        userProfileStore: UserProfileStore = UserProfileStore(),
+        personalizationStore: PersonalizationStore = PersonalizationStore()
     ) {
         self.sessionStore = sessionStore
         self.configStore = configStore
         self.service = service
         self.userProfileStore = userProfileStore
+        self.personalizationStore = personalizationStore
 
         self.sessions = sessionStore.sessions
         self.activeSessionID = sessionStore.activeSessionID
+        self.personalizationBlocks = personalizationStore.blocks
 
         // 第一轮对话的 AI 通过 set_session_metadata 工具挑选会话 emoji/标题。
         // 全局 sink：工具在后台线程执行，跳回主线程后应用到当前活动会话。
         ChatTools.sessionMetadataSink = { [weak self] emoji, title in
             guard let self, let sessionID = self.activeSessionID else { return }
             self.sessionStore.updateSessionMetadata(emoji: emoji, title: title, in: sessionID)
+        }
+
+        // 个性化块工具：主线程读 PersonalizationStore，按名字返回内容 / 可用名字列表。
+        ChatTools.personalizationResolver = { [weak self] name in
+            guard let self else { return nil }
+            return self.personalizationStore.block(named: name)?.content
+        }
+        ChatTools.personalizationNames = { [weak self] in
+            self?.personalizationStore.names() ?? []
         }
 
         // Mirror store changes into this VM (one-way: store → VM).
@@ -313,6 +351,11 @@ final class ChatViewModel: ObservableObject {
             self?.activeSessionID = newID
         }
         .store(in: &cancellables)
+
+        personalizationStore.$blocks.sink { [weak self] newBlocks in
+            self?.personalizationBlocks = newBlocks
+        }
+        .store(in: &cancellables)
     }
 
     // MARK: - Session management
@@ -321,6 +364,41 @@ final class ChatViewModel: ObservableObject {
     func createNewChat() {
         cancelStreaming()
         sessionStore.newSession()
+    }
+
+    /// 创建并切换到一个知识采集会话：使用采集专用 system prompt，
+    /// 收集的信息可点「生成个性化块」保存为命名个性化块。
+    func createPersonalizationCollection() {
+        cancelStreaming()
+        sessionStore.newPersonalizationCollectionSession()
+    }
+
+    /// 把知识采集会话的对话内容整理成一个命名个性化块并保存（同名会覆盖）。
+    func generatePersonalizationBlock(from session: ChatSession, name: String) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+
+        var parts: [String] = []
+        for message in session.messages where message.role == .user || message.role == .assistant {
+            let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !content.isEmpty {
+                parts.append("\(message.role == .user ? "用户" : "助手")：\(content)")
+            }
+        }
+        let content = parts.joined(separator: "\n\n")
+        guard !content.isEmpty else { return }
+
+        // 限长，避免超大的工具返回拖垮请求体 / 上下文。
+        personalizationStore.upsert(PersonalizationBlock(
+            name: trimmedName,
+            content: String(content.prefix(12000)),
+            sourceSessionID: session.id
+        ))
+    }
+
+    /// 删除一个个性化块。
+    func deletePersonalizationBlock(_ block: PersonalizationBlock) {
+        personalizationStore.delete(id: block.id)
     }
 
     /// Deletes the given session.
@@ -380,13 +458,13 @@ final class ChatViewModel: ObservableObject {
         var history = activeSession?.messages
             .filter { !$0.content.isEmpty || !$0.attachments.isEmpty } ?? []
 
-        let systemPrompt = buildSystemPrompt(for: config)
+        let systemPrompt = buildSystemPrompt(for: config, personalizationCollection: activeSession?.isPersonalizationCollection == true)
         history.insert(.system(systemPrompt), at: 0)
 
         // 动态偏好 JSON 紧跟 system prompt 放在最前：上一轮请求的完整
         // messages 单元会成为下一轮的前缀，DeepSeek 的“完整单元匹配”
         // 缓存才能每轮命中历史（放末尾会让每轮单元都含不同结尾而无法匹配）。
-        if let context = buildContextMessage(for: config) {
+        if let context = buildContextMessage(for: config, personalizationCollection: activeSession?.isPersonalizationCollection == true) {
             history.insert(context, at: 1)
         }
 
@@ -459,13 +537,13 @@ final class ChatViewModel: ObservableObject {
         var history = activeSession?.messages
             .filter { !$0.content.isEmpty || !$0.attachments.isEmpty || !$0.documentAttachments.isEmpty } ?? []
 
-        let systemPrompt = buildSystemPrompt(for: config)
+        let systemPrompt = buildSystemPrompt(for: config, personalizationCollection: activeSession?.isPersonalizationCollection == true)
         history.insert(.system(systemPrompt), at: 0)
 
         // 动态偏好 JSON 紧跟 system prompt 放在最前：上一轮请求的完整
         // messages 单元会成为下一轮的前缀，DeepSeek 的“完整单元匹配”
         // 缓存才能每轮命中历史（放末尾会让每轮单元都含不同结尾而无法匹配）。
-        if let context = buildContextMessage(for: config) {
+        if let context = buildContextMessage(for: config, personalizationCollection: activeSession?.isPersonalizationCollection == true) {
             history.insert(context, at: 1)
         }
 
@@ -523,7 +601,8 @@ final class ChatViewModel: ObservableObject {
                     let toolSet: [BuiltinTool]? = configForRequest.toolsEnabled
                         ? ChatTools.set(
                             latexEnabled: configForRequest.latexEnabled,
-                            includeSessionMetadata: isFirstRound
+                            includeSessionMetadata: isFirstRound,
+                            includeKnowledge: !personalizationBlocks.isEmpty
                         )
                         : (isFirstRound
                             ? [ChatTools.getTime, ChatTools.setSessionMetadata]

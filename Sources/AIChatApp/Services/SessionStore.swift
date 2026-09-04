@@ -73,6 +73,19 @@ final class SessionStore: ObservableObject {
         return session
     }
 
+    /// Creates a new personalization-collection session (dedicated collector prompt,
+    /// can be turned into a personalization block) and makes it active.
+    @discardableResult
+    func newPersonalizationCollectionSession() -> ChatSession {
+        let session = ChatSession(
+            title: "个性化块采集",
+            isPersonalizationCollection: true
+        )
+        sessions.insert(session, at: 0)
+        activeSessionID = session.id
+        return session
+    }
+
     /// Deletes a session (by id).
     func delete(_ session: ChatSession) {
         sessions.removeAll { $0.id == session.id }
