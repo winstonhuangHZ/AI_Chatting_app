@@ -380,14 +380,22 @@ private struct TopBarView: View {
             .tint(appearance.accentColor)
 
             // Model picker (populated from the active profile).
-            // Multimodal models are marked with 🖼 on the right.
+            // Multimodal (vision) models get a subtle photo icon on the right.
             if let activeConfig = configStore.activeConfig {
                 Picker(L("model"), selection: modelPickerBinding(for: activeConfig)) {
                     if activeConfig.availableModels.isEmpty {
                         Text(L("model.empty.tag")).tag("")
                     }
                     ForEach(activeConfig.availableModels, id: \.self) { model in
-                        Text(MultimodalSupport.displayName(model)).tag(model)
+                        HStack(spacing: 4) {
+                            Text(model)
+                            if MultimodalSupport.isMultimodal(model) {
+                                Image(systemName: "photo")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .tag(model)
                     }
                 }
                 .pickerStyle(.menu)

@@ -446,7 +446,15 @@ private struct ProfileEditView: View {
                                 Text(L("no.models.yet")).tag("")
                             }
                             ForEach(draft.availableModels, id: \.self) { model in
-                                Text(MultimodalSupport.displayName(model)).tag(model)
+                                HStack(spacing: 4) {
+                                    Text(model)
+                                    if MultimodalSupport.isMultimodal(model) {
+                                        Image(systemName: "photo")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .tag(model)
                             }
                         }
                         .tint(appearanceStore.accentColor)
