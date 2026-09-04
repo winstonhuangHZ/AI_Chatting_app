@@ -64,6 +64,9 @@ struct SidebarView: View {
                             .contentShape(Rectangle())
                     }
                     .menuStyle(.borderlessButton)
+                    // 隐藏 Menu 自带的 disclosure 箭头，只保留上面 label 里的 chevron.down，
+                    // 避免出现「两个箭头」。
+                    .menuIndicator(.hidden)
                     .controlSize(.large)
                     .tint(appearance.prominentButtonColor)
                 }
