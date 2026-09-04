@@ -32,44 +32,39 @@ struct SidebarView: View {
         .safeAreaInset(edge: .top) {
             VStack(spacing: 6) {
                 searchField
-                HStack(spacing: 0) {
-                    // 主按钮：一键新建普通会话（最常用）。
-                    Button(action: {
+                // 「新建会话」铺满整行；右侧小箭头在按钮内部，点开才是「添加个性化块」。
+                Menu {
+                    Button {
                         chatViewModel.createNewChat()
-                    }) {
+                    } label: {
+                        Label(L("new.chat"), systemImage: "square.and.pencil")
+                    }
+                    Button {
+                        chatViewModel.createPersonalizationCollection()
+                    } label: {
+                        Label(L("kb.add"), systemImage: "brain")
+                    }
+                } label: {
+                    HStack(spacing: 4) {
                         Label(L("new.chat"), systemImage: "square.and.pencil")
                             .font(appearance.fontPreset.font(size: appearance.pointSize))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(appearance.prominentButtonColor)
-                    .controlSize(.large)
-
-                    // 折叠的「添加个性化块」：平时收起，点开小箭头才显示。
-                    Menu {
-                        Button {
-                            chatViewModel.createNewChat()
-                        } label: {
-                            Label(L("new.chat"), systemImage: "square.and.pencil")
-                        }
-                        Button {
-                            chatViewModel.createPersonalizationCollection()
-                        } label: {
-                            Label(L("kb.add"), systemImage: "brain")
-                        }
-                    } label: {
+                        Spacer()
                         Image(systemName: "chevron.down")
-                            .font(appearance.fontPreset.font(size: appearance.pointSize))
-                            .frame(width: 26, height: 24)
-                            .contentShape(Rectangle())
+                            .font(appearance.fontPreset.font(size: appearance.pointSize - 2))
                     }
-                    .menuStyle(.borderlessButton)
-                    // 隐藏 Menu 自带的 disclosure 箭头，只保留上面 label 里的 chevron.down，
-                    // 避免出现「两个箭头」。
-                    .menuIndicator(.hidden)
-                    .controlSize(.large)
-                    .tint(appearance.prominentButtonColor)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(appearance.prominentButtonColor)
+                    )
+                    .foregroundStyle(.white)
+                    .contentShape(Rectangle())
                 }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .controlSize(.large)
                 .disabled(isSearching)
             }
             .padding(.horizontal, 12)
