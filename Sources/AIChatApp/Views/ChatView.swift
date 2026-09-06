@@ -46,14 +46,22 @@ struct ChatView: View {
                 blockName = chatViewModel.activeSession?.title ?? ""
                 showGenerateBlock = true
             } label: {
-                Label(L("kb.generate"), systemImage: "square.and.arrow.down.on.square")
-                    .font(appearance.fontPreset.font(size: appearance.pointSize))
+                if chatViewModel.isGeneratingBlock {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(L("kb.generating"))
+                        .font(appearance.fontPreset.font(size: appearance.pointSize))
+                } else {
+                    Label(L("kb.generate"), systemImage: "square.and.arrow.down.on.square")
+                        .font(appearance.fontPreset.font(size: appearance.pointSize))
+                }
             }
             .buttonStyle(.borderedProminent)
             .tint(appearance.accentColor)
             .controlSize(.small)
-            .disabled(chatViewModel.activeSession?.messages.isEmpty == true)
+            .disabled(chatViewModel.activeSession?.messages.isEmpty == true || chatViewModel.isGeneratingBlock)
             .help(L("kb.generate.help"))
+            .animation(.easeInOut(duration: 0.2), value: chatViewModel.isGeneratingBlock)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 5)

@@ -98,6 +98,9 @@ final class ChatViewModel: ObservableObject {
     /// `true` while a stream request is in flight.
     @Published var isStreaming = false
 
+    /// `true` while the "synthesize a personalization block" AI call runs.
+    @Published var isGeneratingBlock = false
+
     /// `true` once the first non-empty SSE token has arrived while streaming.
     ///
     /// Non-streaming render mode still uses SSE transport (low time-to-first-
@@ -137,6 +140,9 @@ final class ChatViewModel: ObservableObject {
 
     /// Cancels the in-flight streaming task (Stop button / session switch).
     private var streamTask: Task<Void, Never>?
+
+    /// Cancels the in-flight personalization-block synthesis task.
+    private var blockGenTask: Task<Void, Never>?
 
     /// Combine subscriptions for reactive sync.
     private var cancellables = Set<AnyCancellable>()
@@ -212,6 +218,20 @@ final class ChatViewModel: ObservableObject {
     2. Restate / organise what the user tells you so it stays accurate and reusable.
     3. When the topic appears covered, give a short structured summary of everything collected.
     Keep replies concise and interview-like (Chinese unless the user writes another language).
+    """
+
+    /// 个性化块 synthesize system prompt：把采集访谈对话总结成一个简洁、结构化、可复用的
+    /// 知识块。点「生成个性化块」后，模型用它把整段对话压缩成精炼事实，而不是存原始记录。
+    private static let personalizationSynthesizePrompt = """
+    You are a summarization engine. Below is the full transcript of a knowledge-collection interview \
+    about ONE topic. Distil it into a single reusable "personalization block".
+    Rules:
+    - Output ONLY the distilled block text. No preamble, no headings such as "##", no closing remarks.
+    - Group the durable facts into short, self-contained lines (one fact per line), organized by theme.
+    - Keep only stable, reusable facts. Drop small talk, off-topic asides, and anything time-specific \
+    (dates of one-off events, transient status, etc.).
+    - Be concise yet complete: preserve exact values (names, ids, preferences, constraints, quantities).
+    - Write in the same language the interview used (Chinese unless the user wrote another language).
     """
 
     private func buildSystemPrompt(for config: APIServerConfig, personalizationCollection: Bool = false) -> String {
@@ -394,27 +414,75 @@ final class ChatViewModel: ObservableObject {
         sessionStore.newPersonalizationCollectionSession()
     }
 
-    /// 把知识采集会话的对话内容整理成一个命名个性化块并保存（同名会覆盖）。
+    /// 把知识采集会话的对话交给 AI，用一个专门的 synthesize prompt 总结成简洁、结构化、
+    /// 可复用的知识块并保存（同名会覆盖）。不再是简单地把整段对话原文原样存进去。
     func generatePersonalizationBlock(from session: ChatSession, name: String) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
 
-        var parts: [String] = []
+        // 组装采集对话文本。
+        var transcript: [String] = []
         for message in session.messages where message.role == .user || message.role == .assistant {
             let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
             if !content.isEmpty {
-                parts.append("\(message.role == .user ? "用户" : "助手")：\(content)")
+                transcript.append("\(message.role == .user ? "用户" : "助手")：\(content)")
             }
         }
-        let content = parts.joined(separator: "\n\n")
-        guard !content.isEmpty else { return }
+        let transcriptText = transcript.joined(separator: "\n\n")
+        guard !transcriptText.isEmpty else { return }
 
-        // 限长，避免超大的工具返回拖垮请求体 / 上下文。
-        personalizationStore.upsert(PersonalizationBlock(
-            name: trimmedName,
-            content: String(content.prefix(12000)),
-            sourceSessionID: session.id
-        ))
+        guard let config = configStore.activeConfig else {
+            errorMessage = L("no.active.profile")
+            return
+        }
+        let model = config.selectedModel
+
+        // 若正有回复在流式生成，先取消，避免冲突。
+        if isStreaming { cancelStreaming() }
+
+        isGeneratingBlock = true
+        clearError()
+
+        // synthesizer 请求：system 指令 + 采集对话作为用户消息。
+        var history: [ChatMessage] = []
+        history.append(.system(Self.personalizationSynthesizePrompt))
+        history.append(.user(transcriptText))
+
+        let service = self.service
+        blockGenTask?.cancel()
+        blockGenTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                var result = ""
+                let stream = try await service.streamChat(
+                    config: config,
+                    model: model,
+                    messages: history
+                )
+                for try await delta in stream { result += delta }
+
+                let final = Self.stripReplyMarkup(result)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !final.isEmpty else {
+                    self.isGeneratingBlock = false
+                    self.errorMessage = L("kb.generate.failed")
+                    return
+                }
+
+                // 限长，避免超大的块内容拖垮后续请求体 / 上下文。
+                self.personalizationStore.upsert(PersonalizationBlock(
+                    name: trimmedName,
+                    content: String(final.prefix(6000)),
+                    sourceSessionID: session.id
+                ))
+                self.isGeneratingBlock = false
+            } catch is CancellationError {
+                self.isGeneratingBlock = false
+            } catch {
+                self.isGeneratingBlock = false
+                self.errorMessage = error.localizedDescription
+            }
+        }
     }
 
     /// 删除一个个性化块。
