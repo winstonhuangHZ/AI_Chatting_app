@@ -205,6 +205,9 @@ final class ChatViewModel: ObservableObject {
     You are a focused knowledge-collector. The user is building a reusable "personalization block" about \
     a specific topic (for example their account / personal details, team facts, a project spec, a \
     checklist). Do NOT wander into off-topic answers. Instead:
+    0. If the app includes a LONG-TERM MEMORY message (durable facts it already knows about the user), \
+    treat it as ground truth to build on: never re-ask what is already recorded there. Only ask about \
+    facts that are still missing, and politely note anything in that memory you believe is outdated.
     1. Ask clear, targeted questions to collect the facts completely and precisely.
     2. Restate / organise what the user tells you so it stays accurate and reusable.
     3. When the topic appears covered, give a short structured summary of everything collected.
@@ -285,10 +288,28 @@ final class ChatViewModel: ObservableObject {
     /// caching is unaffected by profile edits.
     ///
     /// Returns `nil` when there is no profile data to send.
+    ///
+    /// 知识采集会话（personalization collection）同样注入已有长期记忆（用户档案 JSON），
+    /// 让采集模型能基于已知信息继续访谈，而不是让用户把已经记住的事实重新说一遍。
+    /// 注意：这里只作为【只读记忆】注入 —— 采集 system prompt（`personalizationCollectionPrompt`）
+    /// 不包含 PERSONALIZATION OPS 指令，因此模型不会借机误写 / 篡改用户档案。
     private func buildContextMessage(for config: APIServerConfig, personalizationCollection: Bool = false) -> ChatMessage? {
-        // 知识采集会话：不注入用户个人偏好，避免干扰收集、也避免误写 profile。
-        guard !personalizationCollection else { return nil }
         guard let profileJSON = userProfileStore.jsonPayload else { return nil }
+
+        if personalizationCollection {
+            // 采集会话：只注入【用户档案】作为长期记忆 —— 让模型基于已知信息继续采集，
+            // 不再让用户把已经记住的事实重新说一遍。注意：这里【不包含】已保存的个性化块，
+            // 且 startGeneration 会把采集会话强制到非工具分支（Agent 锁死关闭），
+            // 因此模型在采集时【不能调用 fetch_personalization_block 记忆块】。
+            return .system("""
+            LONG-TERM MEMORY — durable facts the app already knows about the user:
+            \(profileJSON)
+            Treat this as ground truth to build on. Only ask about the facts relevant to this \
+            personalization block that are still missing, and politely point out anything in this \
+            memory you believe is outdated.
+            """)
+        }
+
         return .system("""
         KNOWLEDGE ABOUT THE USER (use it to personalize your reply):
         \(profileJSON)
@@ -582,6 +603,10 @@ final class ChatViewModel: ObservableObject {
 
         isStreaming = true
 
+        // 知识采集会话：Agent 模式锁死关闭 —— 不走工具调用分支，模型拿不到
+        // fetch_personalization_block（记忆块）等任何工具，只能按采集 prompt 纯访谈。
+        let isCollection = activeSession?.isPersonalizationCollection == true
+
         let service = service
         let configForRequest = config
         let modelForRequest = model
@@ -594,7 +619,10 @@ final class ChatViewModel: ObservableObject {
                 // full tool set; non-agent chats send only `get_time` when the
                 // "timestamp" toggle is on (cache-safe: tool results are never
                 // persisted, so the request prefix stays byte-identical).
-                if configForRequest.toolsEnabled || configForRequest.includeTimestamp {
+                //
+                // 知识采集会话强制锁死：`!isCollection` 让它绕开整个工具分支，因此不会
+                // 拿到 fetch_personalization_block / webSearch 等任何工具，只能纯访谈。
+                if !isCollection && (configForRequest.toolsEnabled || configForRequest.includeTimestamp) {
                     // 第一轮对话：历史里还没有任何 assistant 回复。此时才把
                     // set_session_metadata 广告给模型，让 AI 挑选会话 emoji/标题。
                     let isFirstRound = history.filter { $0.role == .assistant }.isEmpty
