@@ -1,5 +1,6 @@
 # SwiftPM 构建产物
 .build/
+.build-x86/
 .stage/
 
 # macOS
@@ -9,3 +10,8 @@
 xcuserdata/
 DerivedData/
 *.xcuserstate
+
+# 本地打包产物
+dist/*.dmg
+dist/*.zip
+*.dmg
