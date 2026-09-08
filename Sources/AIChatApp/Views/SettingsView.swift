@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Settings window (macOS 14+): manages API relay profiles + user profile
 /// (learned personalization preferences).
@@ -13,8 +14,49 @@ struct SettingsView: View {
     @State private var editingConfig: APIServerConfig?
     @State private var isAddingNew = false
     @State private var showStatusAlert = false
+    @State private var selectedSection = SettingsSection.account
+
+    private enum SettingsSection: Hashable {
+        case account
+        case api
+    }
 
     var body: some View {
+        NavigationSplitView {
+            List(selection: $selectedSection) {
+                Label(L("settings.account"), systemImage: "person.crop.circle")
+                    .tag(SettingsSection.account)
+                Label(L("api.relay.profiles"), systemImage: "server.rack")
+                    .tag(SettingsSection.api)
+            }
+            .listStyle(.sidebar)
+            .navigationTitle(L("settings"))
+        } detail: {
+            Group {
+                switch selectedSection {
+                case .account:
+                    AccountSettingsView()
+                case .api:
+                    apiProfileContent
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minWidth: 760, idealWidth: 900, minHeight: 560)
+        .alert(
+            appSettingViewModel.statusIsError ? L("operation.failed") : L("success"),
+            isPresented: $showStatusAlert
+        ) {
+            Button("OK", role: .cancel) { appSettingViewModel.clearStatus() }
+        } message: {
+            Text(appSettingViewModel.statusMessage ?? "")
+        }
+        .onChange(of: appSettingViewModel.statusMessage) { _, message in
+            if message != nil { showStatusAlert = true }
+        }
+    }
+
+    private var apiProfileContent: some View {
         Group {
             if let config = editingConfig {
                 ProfileEditView(
@@ -27,8 +69,12 @@ struct SettingsView: View {
                             appSettingViewModel.update(updated)
                         }
                         editingConfig = nil
+                        isAddingNew = false
                     },
-                    onCancel: { editingConfig = nil }
+                    onCancel: {
+                        editingConfig = nil
+                        isAddingNew = false
+                    }
                 )
             } else {
                 ProfileListView(
@@ -41,17 +87,105 @@ struct SettingsView: View {
             }
         }
         .frame(minWidth: 560, idealWidth: 700, minHeight: 520)
-        .alert(
-            appSettingViewModel.statusIsError ? L("operation.failed") : L("success"),
-            isPresented: $showStatusAlert
-        ) {
-            Button("OK", role: .cancel) { appSettingViewModel.clearStatus() }
-        } message: {
-            Text(appSettingViewModel.statusMessage ?? "")
+    }
+}
+
+// MARK: - Account settings
+
+private struct AccountSettingsView: View {
+    @EnvironmentObject private var userProfileStore: UserProfileStore
+    @EnvironmentObject private var appearanceStore: AppearanceStore
+    @EnvironmentObject private var localization: LocalizationManager
+
+    @State private var draftName = ""
+
+    var body: some View {
+        Form {
+            Section {
+                HStack(spacing: 18) {
+                    avatarView
+                        .frame(width: 96, height: 96)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(userProfileStore.displayName.isEmpty
+                             ? L("account.default.name")
+                             : userProfileStore.displayName)
+                            .font(.title2.weight(.semibold))
+                        Text(L("account.avatar.hint"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            Button(L("account.choose.avatar"), action: chooseAvatar)
+                            if userProfileStore.avatarData != nil {
+                                Button(L("account.remove.avatar"), role: .destructive) {
+                                    userProfileStore.avatarData = nil
+                                }
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text(L("account.profile"))
+            }
+
+            Section {
+                TextField(L("account.username"), text: $draftName)
+                    .onSubmit(saveName)
+            } header: {
+                Text(L("account.details"))
+            } footer: {
+                Text(L("account.username.hint"))
+                    .font(.caption)
+            }
+
+            HStack {
+                Spacer()
+                Button(L("save"), action: saveName)
+                    .buttonStyle(.borderedProminent)
+                    .tint(appearanceStore.prominentButtonColor)
+                    .disabled(draftName == userProfileStore.displayName)
+            }
         }
-        .onChange(of: appSettingViewModel.statusMessage) { _, message in
-            if message != nil { showStatusAlert = true }
+        .formStyle(.grouped)
+        .navigationTitle(L("settings.account"))
+        .padding(12)
+        .onAppear { draftName = userProfileStore.displayName }
+    }
+
+    @ViewBuilder
+    private var avatarView: some View {
+        if let data = userProfileStore.avatarData, let image = NSImage(data: data) {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFill()
+                .clipShape(Circle())
+        } else {
+            ZStack {
+                Circle().fill(appearanceStore.prominentButtonColor.opacity(0.18))
+                Image(systemName: "person.fill")
+                    .font(.system(size: 38))
+                    .foregroundStyle(appearanceStore.prominentButtonColor)
+            }
         }
+    }
+
+    private func saveName() {
+        userProfileStore.displayName = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        draftName = userProfileStore.displayName
+    }
+
+    private func chooseAvatar() {
+        let panel = NSOpenPanel()
+        panel.title = L("account.choose.avatar")
+        panel.prompt = L("account.choose.avatar")
+        panel.allowedContentTypes = [.png, .jpeg, .heic, .tiff]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let image = NSImage(contentsOf: url),
+              let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { return }
+        userProfileStore.avatarData = png
     }
 }
 

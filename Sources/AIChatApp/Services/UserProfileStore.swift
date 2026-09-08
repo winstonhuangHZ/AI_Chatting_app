@@ -43,12 +43,24 @@ final class UserProfileStore: ObservableObject {
     // MARK: - Constants
 
     private static let key = "userProfile.preferences.v1"
+    private static let displayNameKey = "userProfile.displayName.v1"
+    private static let avatarKey = "userProfile.avatarData.v1"
 
     // MARK: - Published state
 
     /// All known preferences.
     @Published var preferences: [UserPreference] {
         didSet { persist() }
+    }
+
+    /// Optional account-style display name shown in the settings account page.
+    @Published var displayName: String {
+        didSet { UserDefaults.standard.set(displayName, forKey: Self.displayNameKey) }
+    }
+
+    /// Avatar image data kept locally so it continues working if the source file moves.
+    @Published var avatarData: Data? {
+        didSet { UserDefaults.standard.set(avatarData, forKey: Self.avatarKey) }
     }
 
     // MARK: - Initializers
@@ -60,6 +72,8 @@ final class UserProfileStore: ObservableObject {
         } else {
             self.preferences = []
         }
+        self.displayName = UserDefaults.standard.string(forKey: Self.displayNameKey) ?? ""
+        self.avatarData = UserDefaults.standard.data(forKey: Self.avatarKey)
     }
 
     // MARK: - CRUD
