@@ -629,6 +629,7 @@ private struct MessageBubble: View {
 
     @EnvironmentObject private var appearance: AppearanceStore
     @EnvironmentObject private var chatViewModel: ChatViewModel
+    @EnvironmentObject private var userProfileStore: UserProfileStore
     @EnvironmentObject private var localization: LocalizationManager
 
     // MARK: - Body
@@ -1010,11 +1011,22 @@ private struct MessageBubble: View {
         message.content.isEmpty && isStreaming ? "" : message.content
     }
 
+    @ViewBuilder
     private var avatar: some View {
-        Image(systemName: message.role == .user ? "person.crop.circle.fill" : "sparkles")
-            .font(.title3)
-            .foregroundStyle(message.role == .user ? appearance.accentColor : .purple)
-            .frame(width: 28, height: 28)
+        if message.role == .user,
+           let data = userProfileStore.avatarData,
+           let image = NSImage(data: data) {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 28, height: 28)
+                .clipShape(Circle())
+        } else {
+            Image(systemName: message.role == .user ? "person.crop.circle.fill" : "sparkles")
+                .font(.title3)
+                .foregroundStyle(message.role == .user ? appearance.accentColor : .purple)
+                .frame(width: 28, height: 28)
+        }
     }
 }
 
