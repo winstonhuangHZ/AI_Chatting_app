@@ -522,6 +522,20 @@ private struct MessageList: View {
     /// 聊天滚动视口高度。
     @State private var viewportHeight: CGFloat = 0
 
+    /// Whether generation started while the user was already at the bottom.
+    /// This is deliberately captured once per generation; streamed content
+    /// must not repeatedly recalculate or take over the user's scroll position.
+    @State private var followStreamingContent = false
+
+    /// Keep the initial view light for very long conversations. Older messages
+    /// are loaded in pages as the user reaches the top.
+    @State private var visibleMessageCount = 80
+
+    private var visibleMessages: [ChatMessage] {
+        let start = max(0, session.messages.count - visibleMessageCount)
+        return Array(session.messages[start...])
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -535,7 +549,18 @@ private struct MessageList: View {
                     // 重型 MarkdownUI 表格/标题/列表，VStack 会让全部消息每 tick
                     // 重渲染（实测 30 条 ≈ 21ms/tick vs LazyVStack ≈ 2ms/tick）。
                     LazyVStack(spacing: 14) {
-                        ForEach(session.messages) { message in
+                        if visibleMessageCount < session.messages.count {
+                            Button("Load earlier messages") {
+                                visibleMessageCount = min(
+                                    session.messages.count,
+                                    visibleMessageCount + 80
+                                )
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 8)
+                        }
+                        ForEach(visibleMessages) { message in
                             MessageBubble(
                                 message: message,
                                 isStreaming: message.id == streamingMessageID,
@@ -572,16 +597,18 @@ private struct MessageList: View {
             }
             .onPreferenceChange(MessageListBottomEdgeKey.self) { bottomEdgeY = $0 }
             .onPreferenceChange(MessageListViewportHeightKey.self) { viewportHeight = $0 }
-            .onChange(of: session.messages.last?.id) { oldID, _ in
-                // 发送新消息时“保持阅读位置，绝不拽走”：
-                // append 后 anchor 会把视口拽到新底部；若底部哨兵显示视口
-                // 确实在底部（发送前用户就停在底部），就把视口钉回发送前的
-                // 最后一条消息（oldID），精确还原阅读位置。上翻时 anchor 不
-                // 拽 → 哨兵不在底部 → 什么都不做，视口纹丝不动。
-                if let oldID,
-                   bottomEdgeY <= viewportHeight + 4,
-                   session.messages.contains(where: { $0.id == oldID }) {
-                    proxy.scrollTo(oldID, anchor: .bottom)
+            .onChange(of: session.id) { _, _ in
+                visibleMessageCount = 80
+                followStreamingContent = false
+            }
+            .onChange(of: streamingMessageID) { oldID, newID in
+                // Capture the follow mode at generation start. Do not call
+                // scrollTo for streamed text changes: changing the assistant
+                // message height must never pull the user back to the bottom.
+                if oldID == nil, newID != nil {
+                    followStreamingContent = bottomEdgeY <= viewportHeight + 12
+                } else if newID == nil {
+                    followStreamingContent = false
                 }
             }
             // 侧栏搜索跳转：居中 + 高亮（用户主动操作，允许动画）。
@@ -593,6 +620,25 @@ private struct MessageList: View {
                 }
             }
         }
+    }
+}
+
+private struct StreamingTextBubble: View {
+    let text: String
+    let background: Color
+    let appearance: AppearanceStore
+
+    var body: some View {
+        Text(text)
+            .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(background)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .frame(maxWidth: 620, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -635,6 +681,11 @@ private struct MessageBubble: View {
     // MARK: - Body
 
     var body: some View {
+        messageRow
+    }
+
+    @ViewBuilder
+    private var messageRow: some View {
         HStack(alignment: .top, spacing: 10) {
             if message.role == .assistant {
                 avatar
@@ -642,6 +693,39 @@ private struct MessageBubble: View {
 
             // 列内对齐跟随角色：assistant 靠左（头像在左），user 靠右（头像在右）。
             // 元信息行（You + 时间）与图片/文档附件也随之对齐，不再漂到最左边。
+            messageColumn
+
+            if message.role == .user {
+                avatar
+            }
+        }
+        .frame(maxWidth: .infinity,
+               alignment: message.role == .user ? .trailing : .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(3)
+        .background(isHighlighted ? appearance.accentColor.opacity(0.18) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .animation(.easeInOut(duration: 0.25), value: isHighlighted)
+        .contextMenu {
+            Button {
+                chatViewModel.copyMessage(message)
+            } label: {
+                Label(L("msg.copy"), systemImage: "doc.on.doc")
+            }
+            .disabled(message.content.isEmpty)
+
+            Divider()
+
+            Button(role: .destructive) {
+                chatViewModel.deleteMessage(message)
+            } label: {
+                Label(L("msg.delete"), systemImage: "trash")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var messageColumn: some View {
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(roleLabel).font(.caption).foregroundStyle(.secondary)
@@ -652,7 +736,7 @@ private struct MessageBubble: View {
                         .font(.caption2).foregroundStyle(.tertiary)
                         .help(message.timestamp.formatted(date: .complete, time: .standard))
 
-                    if message.role == .assistant {
+                    if message.role == .assistant && !isStreaming {
                         Button {
                             showDetail.toggle()
                         } label: {
@@ -686,7 +770,20 @@ private struct MessageBubble: View {
                 }
 
                 if !contentDisplay.isEmpty {
-                    if message.role == .assistant {
+                    if message.role == .assistant && isStreaming {
+                        // Keep partial replies cheap. Rich Markdown/LaTeX/code
+                        // rendering is deferred until the stream has completed.
+                        Text(contentDisplay)
+                            .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
+                            .foregroundStyle(.primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(bubbleBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .frame(maxWidth: 620, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if message.role == .assistant {
                         MarkdownText(text: message.content, fontSize: nil)
                             // Inner: let the markdown breathe to the full row.
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -738,38 +835,6 @@ private struct MessageBubble: View {
                     messageActionBar
                 }
             }
-
-            if message.role == .user {
-                avatar
-            }
-        }
-        .frame(maxWidth: .infinity,
-               alignment: message.role == .user ? .trailing : .leading)
-        // KEY FIX: prevent the whole bubble from being squeezed into a
-        // zero-height row by LazyVStack while its Markdown re-lays out.
-        .fixedSize(horizontal: false, vertical: true)
-        // Search-result highlight (from the sidebar full-text search).
-        .padding(3)
-        .background(isHighlighted ? appearance.accentColor.opacity(0.18) : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .animation(.easeInOut(duration: 0.25), value: isHighlighted)
-        // Right-click actions: copy / delete.
-        .contextMenu {
-            Button {
-                chatViewModel.copyMessage(message)
-            } label: {
-                Label(L("msg.copy"), systemImage: "doc.on.doc")
-            }
-            .disabled(message.content.isEmpty)
-
-            Divider()
-
-            Button(role: .destructive) {
-                chatViewModel.deleteMessage(message)
-            } label: {
-                Label(L("msg.delete"), systemImage: "trash")
-            }
-        }
     }
 
     // MARK: - Sources card

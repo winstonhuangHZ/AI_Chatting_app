@@ -138,7 +138,8 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Internal stream state
 
-    /// Cancels the in-flight streaming task (Stop button / session switch).
+    /// Cancels the in-flight streaming task (Stop button or replacing the
+    /// current generation). Switching sessions deliberately does not cancel it.
     private var streamTask: Task<Void, Never>?
 
     /// Cancels the in-flight personalization-block synthesis task.
@@ -569,14 +570,12 @@ final class ChatViewModel: ObservableObject {
     /// Selects an existing session.
     func selectSession(_ session: ChatSession) {
         guard session.id != activeSessionID else { return }
-        cancelStreaming()
         sessionStore.activeSessionID = session.id
     }
 
     /// Selects a session by id (used by the sidebar List selection binding).
     func selectSession(id: UUID?) {
         guard let id, id != activeSessionID else { return }
-        cancelStreaming()
         sessionStore.activeSessionID = id
     }
 
@@ -742,10 +741,8 @@ final class ChatViewModel: ObservableObject {
 
                     var accumulated = ""
                     for try await delta in stream {
-                        guard self.activeSessionID == sessionID else {
-                            self.cancelStreaming()
-                            return
-                        }
+                        // Continue writing to the originating session even if
+                        // the user switches to another conversation.
                         // `delta.content` is already JSON-decoded; real newlines
                         // are preserved inside the string, so do NOT append a
                         // synthetic "\n" per frame.
@@ -793,14 +790,12 @@ final class ChatViewModel: ObservableObject {
 
                 var accumulated = ""
                 // Throttle UI updates so tiny SSE chunks don't trigger a full
-                // SwiftUI redraw every time. We flush at most every 100 ms.
+                // SwiftUI redraw every time. We flush at most every 160 ms.
                 var lastFlush = ContinuousClock.now
                 for try await delta in stream {
-                    // If the user switched sessions mid-stream, stop writing.
-                    guard self.activeSessionID == sessionID else {
-                        self.cancelStreaming()
-                        return
-                    }
+                    // A session switch must not cancel generation. The store
+                    // writes to the originating session, so the completed
+                    // answer is available when the user switches back.
                     // IMPORTANT: do NOT append a synthetic "\n" after each
                     // delta. The `delta.content` from OpenAI-compatible SSE is
                     // already JSON-decoded, so any real newlines inside the
@@ -811,9 +806,9 @@ final class ChatViewModel: ObservableObject {
                     // corrupted text gets persisted into history).
                     accumulated += delta
 
-                    // 100 ms throttle: only flush to the UI when enough time
+                    // 160 ms throttle: only flush to the UI when enough time
                     // has passed (and always flush on the final iteration).
-                    if lastFlush.duration(to: .now) > .milliseconds(100) {
+                    if lastFlush.duration(to: .now) > .milliseconds(160) {
                         lastFlush = .now
                         self.sessionStore.updateLastAssistantContent(
                             Self.stripReplyMarkup(accumulated),
@@ -857,7 +852,7 @@ final class ChatViewModel: ObservableObject {
                 self.hasReceivedFirstToken = false
 
                 // Remove the placeholder assistant message if nothing arrived.
-                let partial = self.activeSession?
+                let partial = self.sessions.first(where: { $0.id == sessionID })?
                     .messages.last(where: { $0.role == .assistant })
                 if partial?.content.isEmpty == true {
                     self.sessionStore.removeLastAssistantMessage(in: sessionID)
@@ -890,11 +885,6 @@ final class ChatViewModel: ObservableObject {
         var toolFlow: [MessageToolCallRecord] = []
 
         for try await event in stream {
-            // If the user switched sessions mid-stream, stop writing.
-            guard activeSessionID == sessionID else {
-                cancelStreaming()
-                return
-            }
             switch event {
             case .text(let delta):
                 accumulated += delta
@@ -902,8 +892,8 @@ final class ChatViewModel: ObservableObject {
                     && !accumulated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     hasReceivedFirstToken = true
                 }
-                // Throttle UI updates to ~100 ms (streaming render only).
-                if renderAsYouGo, lastFlush.duration(to: .now) > .milliseconds(100) {
+                // Throttle UI updates to ~160 ms (streaming render only).
+                if renderAsYouGo, lastFlush.duration(to: .now) > .milliseconds(160) {
                     lastFlush = .now
                     sessionStore.updateLastAssistantContent(
                         Self.stripReplyMarkup(accumulated),
