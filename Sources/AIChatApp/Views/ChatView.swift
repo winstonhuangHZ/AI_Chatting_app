@@ -108,6 +108,7 @@ struct ChatView: View {
                 MessageList(
                     session: session,
                     streamingMessageID: chatViewModel.streamingAssistantID,
+                    streamingActivity: chatViewModel.currentToolActivity,
                     hasReceivedFirstToken: chatViewModel.hasReceivedFirstToken,
                     highlightMessageID: chatViewModel.highlightMessageID
                 )
@@ -510,6 +511,9 @@ private struct MessageList: View {
     /// The id of the assistant message currently being streamed.
     let streamingMessageID: UUID?
 
+    /// Current Agent tool activity shown under the streaming placeholder.
+    let streamingActivity: String?
+
     /// `true` once streaming has yielded content (drives two-stage indicator).
     let hasReceivedFirstToken: Bool
 
@@ -595,6 +599,7 @@ private struct MessageList: View {
                             MessageBubble(
                                 message: message,
                                 isStreaming: message.id == streamingMessageID,
+                                streamingActivity: streamingActivity,
                                 hasReceivedFirstToken: hasReceivedFirstToken,
                                 isHighlighted: message.id == highlightMessageID
                             )
@@ -738,6 +743,29 @@ private struct MessageList: View {
     }
 }
 
+// MARK: - Typing indicator
+
+/// Three soft dots that pulse while the assistant is thinking/streaming.
+private struct TypingIndicator: View {
+    @State private var pulsing = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<3, id: \.self) { _ in
+                Circle()
+                    .fill(Color.secondary)
+                    .frame(width: 4, height: 4)
+                    .opacity(pulsing ? 0.3 : 1)
+            }
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
+                pulsing = true
+            }
+        }
+    }
+}
+
 // MARK: - Message bubble
 
 /// Renders a single chat message as a bubble with role-appropriate styling
@@ -755,6 +783,9 @@ private struct MessageBubble: View {
     /// `true` while this assistant message is being streamed.
     let isStreaming: Bool
 
+    /// Agent tool status shown while this placeholder is streaming.
+    let streamingActivity: String?
+
     /// `true` once streaming has yielded the first content token.
     let hasReceivedFirstToken: Bool
 
@@ -766,6 +797,10 @@ private struct MessageBubble: View {
 
     /// `true` while the DeepSeek "thinking" section is expanded.
     @State private var showReasoning = false
+
+    /// `true` while the user is editing this (user) message inline.
+    @State private var isEditing = false
+    @State private var editDraft = ""
 
     // MARK: - Environment
 
@@ -846,6 +881,20 @@ private struct MessageBubble: View {
                             MessageDetailView(message: message)
                         }
                     }
+
+                    // User messages: pencil opens inline edit + resend.
+                    if message.role == .user && !isStreaming {
+                        Button {
+                            editDraft = message.content
+                            isEditing = true
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 10))
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.tertiary)
+                        .help(L("msg.edit"))
+                    }
                 }
 
                 // Image attachments preview (user messages).
@@ -865,7 +914,9 @@ private struct MessageBubble: View {
                     reasoningSection(reasoning)
                 }
 
-                if !contentDisplay.isEmpty {
+                if isEditing {
+                    editComposer
+                } else if !contentDisplay.isEmpty {
                     if message.role == .assistant && isStreaming {
                         // Keep partial replies cheap. Rich Markdown/LaTeX/code
                         // rendering is deferred until the stream has completed.
@@ -907,13 +958,9 @@ private struct MessageBubble: View {
                 }
 
                 if isStreaming {
-                    HStack(spacing: 4) {
-                        ProgressView().controlSize(.small)
-                        // Before the first token: "Waiting for response…";
-                        // once tokens flow: "Generating…". Both render modes
-                        // (streaming & non-streaming render) use SSE transport,
-                        // so this two-stage indicator applies to both.
-                        Text(L(hasReceivedFirstToken ? "generating" : "generating.waiting"))
+                    HStack(spacing: 6) {
+                        TypingIndicator()
+                        Text(streamingStatusText)
                             .appearanceFont(appearance.fontPreset, size: 11)
                             .foregroundStyle(.secondary)
                     }
@@ -931,6 +978,43 @@ private struct MessageBubble: View {
                     messageActionBar
                 }
             }
+    }
+
+    /// Inline editor used when the user edits one of their own messages.
+    @ViewBuilder
+    private var editComposer: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextEditor(text: $editDraft)
+                .font(appearance.fontPreset.font(size: appearance.pointSize))
+                .frame(minHeight: 52, maxHeight: 150)
+                .padding(6)
+                .background(Color(nsColor: .textBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                )
+
+            HStack(spacing: 8) {
+                Button {
+                    chatViewModel.editUserMessageAndRegenerate(
+                        message,
+                        newContent: editDraft
+                    )
+                    isEditing = false
+                } label: {
+                    Label(L("msg.edit.resend"), systemImage: "paperplane.fill")
+                        .font(.callout)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(appearance.accentColor)
+
+                Button(L("cancel")) {
+                    isEditing = false
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .frame(maxWidth: 560, alignment: .leading)
     }
 
     // MARK: - Sources card
@@ -1162,6 +1246,16 @@ private struct MessageBubble: View {
         case .system:
             return Color(nsColor: .selectedControlColor).opacity(0.4)
         }
+    }
+
+    /// Status text shown next to the animated dots while this message streams.
+    private var streamingStatusText: String {
+        if let streamingActivity, !streamingActivity.isEmpty {
+            return streamingActivity
+        }
+        // Both render modes use SSE transport, so the two-stage indicator
+        // applies everywhere: waiting for first token vs generating.
+        return L(hasReceivedFirstToken ? "generating" : "generating.waiting")
     }
 
     private var contentDisplay: String {

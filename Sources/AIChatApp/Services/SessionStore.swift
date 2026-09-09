@@ -105,6 +105,31 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    /// Pins/unpins a session. Pin state is persisted on the session itself;
+    /// display ordering is handled by the ViewModel.
+    func togglePin(_ session: ChatSession) {
+        guard let index = sessions.firstIndex(where: { $0.id == session.id }) else { return }
+        sessions[index].isPinned.toggle()
+    }
+
+    /// Manual user-provided title/emoji (sidebar edit sheet). Marks the title
+    /// as "chosen" so the model stops trying to rename it automatically.
+    func applyManualMetadata(
+        title: String? = nil,
+        emoji: String? = nil,
+        in sessionID: UUID
+    ) {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+        if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sessions[index].title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            sessions[index].hasModelTitle = true
+        }
+        if let emoji {
+            let cleaned = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
+            sessions[index].emoji = cleaned.isEmpty ? nil : cleaned
+        }
+    }
+
     /// Deletes all sessions.
     func deleteAll() {
         sessions.removeAll()
@@ -227,6 +252,21 @@ final class SessionStore: ObservableObject {
             return
         }
         sessions[sessionIndex].messages.remove(at: msgIndex)
+    }
+
+    /// Replaces a user message in place and drops every later message, so the
+    /// edited prompt becomes the new end of the conversation.
+    func replaceMessageAndRemoveFollowing(
+        messageID: UUID,
+        with replacement: ChatMessage,
+        in sessionID: UUID
+    ) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let messageIndex = sessions[sessionIndex].messages.firstIndex(where: { $0.id == messageID }) else {
+            return
+        }
+        sessions[sessionIndex].messages.removeSubrange(messageIndex...)
+        sessions[sessionIndex].messages.insert(replacement, at: messageIndex)
     }
 
     // MARK: - Persistence

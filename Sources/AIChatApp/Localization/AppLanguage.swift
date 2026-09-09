@@ -133,6 +133,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "price.unknown": "(price unknown for this model)",
         "relay.price": "(relay price)",
         "msg.copy": "Copy",
+        "msg.edit": "Edit",
+        "msg.edit.resend": "Save & Resend",
         "codeblock.copied": "Copied",
         "msg.delete": "Delete",
         "msg.retry": "Retry",
@@ -151,6 +153,12 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         // 侧边栏
         "delete.chat": "Delete Chat",
         "delete.all.chats": "Delete all chats",
+        "session.pin": "Pin to top",
+        "session.unpin": "Unpin",
+        "session.rename": "Rename & Emoji",
+        "session.title": "Title",
+        "session.emoji": "Emoji",
+        "session.emoji.hint": "Optional single emoji",
         "delete.all.confirm.title": "Delete all chats?",
         "delete.all.confirm.message": "All conversations on this Mac will be removed permanently. This cannot be undone.",
 
@@ -341,6 +349,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "price.unknown": "(该模型价格未知)",
         "relay.price": "(中转站价格)",
         "msg.copy": "复制",
+        "msg.edit": "编辑",
+        "msg.edit.resend": "保存并重新生成",
         "codeblock.copied": "已复制",
         "msg.delete": "删除",
         "msg.retry": "重新生成",
@@ -357,6 +367,12 @@ enum AppLanguage: String, CaseIterable, Identifiable {
 
         "delete.chat": "删除会话",
         "delete.all.chats": "删除全部会话",
+        "session.pin": "置顶会话",
+        "session.unpin": "取消置顶",
+        "session.rename": "重命名与 Emoji",
+        "session.title": "标题",
+        "session.emoji": "Emoji",
+        "session.emoji.hint": "可选，填一个 emoji",
         "delete.all.confirm.title": "删除全部会话？",
         "delete.all.confirm.message": "将永久删除本机上的全部会话，此操作无法撤销。",
 

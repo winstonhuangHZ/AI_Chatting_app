@@ -18,6 +18,9 @@ struct SidebarView: View {
     /// 删除全部会话前的二次确认。
     @State private var confirmDeleteAll = false
 
+    /// 当前正在重命名/换 emoji 的会话。
+    @State private var sessionToEdit: ChatSession?
+
     /// 搜索框输入（防抖后写入 ViewModel，避免每次按键全量扫历史）。
     @State private var searchText = ""
 
@@ -35,6 +38,12 @@ struct SidebarView: View {
             }
         }
         .background(appearance.sidebarBackground)
+        .sheet(item: $sessionToEdit) { session in
+            SessionIdentitySheet(session: session)
+                .environmentObject(chatViewModel)
+                .environmentObject(appearance)
+                .environmentObject(localization)
+        }
         .confirmationDialog(
             L("delete.all.confirm.title"),
             isPresented: $confirmDeleteAll,
@@ -215,13 +224,30 @@ struct SidebarView: View {
     private var sessionList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(chatViewModel.sessions) { session in
+                ForEach(chatViewModel.sidebarSessions) { session in
                     SidebarRow(
                         session: session,
                         isSelected: chatViewModel.activeSessionID == session.id,
                         onSelect: { chatViewModel.selectSession(id: session.id) }
                     )
                     .contextMenu {
+                        Button {
+                            chatViewModel.togglePinSession(session)
+                        } label: {
+                            Label(
+                                L(session.isPinned ? "session.unpin" : "session.pin"),
+                                systemImage: session.isPinned ? "pin.slash" : "pin"
+                            )
+                        }
+
+                        Button {
+                            sessionToEdit = session
+                        } label: {
+                            Label(L("session.rename"), systemImage: "pencil")
+                        }
+
+                        Divider()
+
                         Button {
                             exportPDF(session)
                         } label: {
@@ -303,6 +329,11 @@ private struct SidebarRow: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .foregroundStyle(isSelected ? appearance.accentColor : Color.primary)
+                    if session.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 HStack(spacing: 4) {
@@ -417,6 +448,66 @@ private struct PersonalizationBlockContent: View {
             .frame(maxHeight: 240)
         }
         .padding(12)
+    }
+}
+
+// MARK: - Session identity editor (title + emoji)
+
+/// Sheet used from the sidebar context menu to manually name a conversation
+/// and choose its emoji.
+private struct SessionIdentitySheet: View {
+    let session: ChatSession
+
+    @EnvironmentObject private var chatViewModel: ChatViewModel
+    @EnvironmentObject private var appearance: AppearanceStore
+    @EnvironmentObject private var localization: LocalizationManager
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var title: String
+    @State private var emoji: String
+
+    init(session: ChatSession) {
+        self.session = session
+        _title = State(initialValue: session.title)
+        _emoji = State(initialValue: session.emoji ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(L("session.rename"))
+                .font(.headline)
+
+            TextField(L("session.title"), text: $title)
+                .textFieldStyle(.roundedBorder)
+
+            HStack {
+                TextField(L("session.emoji"), text: $emoji)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 120)
+                Text(L("session.emoji.hint"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Spacer()
+                Button(L("cancel")) { dismiss() }
+                    .buttonStyle(.bordered)
+                Button(L("save")) {
+                    chatViewModel.updateSessionIdentity(
+                        title: title,
+                        emoji: emoji,
+                        for: session
+                    )
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(appearance.prominentButtonColor)
+                .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(18)
+        .frame(width: 360)
     }
 }
 

@@ -108,6 +108,11 @@ final class ChatViewModel: ObservableObject {
     /// "Waiting for response…" → "Generating…" two-stage indicator.
     @Published var hasReceivedFirstToken = false
 
+    /// Short human-readable tool activity while Agent mode is running a tool
+    /// (e.g. "running web_search…"). Rendered as a status line in the bubble
+    /// instead of being written into the assistant message content.
+    @Published var currentToolActivity: String?
+
     /// User-facing toast when the model added/updated/removed memories.
     @Published var memoryNotice: MemoryNotice?
 
@@ -360,6 +365,12 @@ final class ChatViewModel: ObservableObject {
         activeSession?.messages ?? []
     }
 
+    /// Sessions in sidebar display order: pinned conversations first, then the
+    /// store's existing recency order.
+    var sidebarSessions: [ChatSession] {
+        sessions.filter(\.isPinned) + sessions.filter { !$0.isPinned }
+    }
+
     // MARK: - Initializers
 
     init(
@@ -422,6 +433,20 @@ final class ChatViewModel: ObservableObject {
     }
 
     // MARK: - Session management
+
+    /// Pins/unpins a conversation from the sidebar.
+    func togglePinSession(_ session: ChatSession) {
+        sessionStore.togglePin(session)
+    }
+
+    /// Applies a manual sidebar title/emoji entered by the user.
+    func updateSessionIdentity(title: String, emoji: String, for session: ChatSession) {
+        sessionStore.applyManualMetadata(
+            title: title,
+            emoji: emoji,
+            in: session.id
+        )
+    }
 
     /// Creates a new empty chat and switches to it.
     func createNewChat() {
@@ -542,6 +567,57 @@ final class ChatViewModel: ObservableObject {
         sessionStore.deleteMessage(message, in: sessionID)
         // 删除消息会改变该会话历史的字节前缀 → 下次请求缓存从删除点起重置。
         cacheResetNotice = CacheResetNotice(reason: .historyEdited)
+    }
+
+    /// Edits a user prompt in place, removes every later message, and starts a
+    /// fresh assistant reply — the standard "edit and resend" chat flow.
+    func editUserMessageAndRegenerate(_ message: ChatMessage, newContent: String) {
+        guard message.role == .user,
+              let sessionID = activeSessionID,
+              let config = configStore.activeConfig else { return }
+
+        let trimmed = newContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !message.attachments.isEmpty || !message.documentAttachments.isEmpty else {
+            return
+        }
+
+        cancelStreaming()
+        clearError()
+
+        let replacement = ChatMessage(
+            id: message.id,
+            role: .user,
+            content: trimmed,
+            attachments: message.attachments,
+            documentAttachments: message.documentAttachments,
+            timestamp: message.timestamp
+        )
+        sessionStore.replaceMessageAndRemoveFollowing(
+            messageID: message.id,
+            with: replacement,
+            in: sessionID
+        )
+
+        // 编辑会改变历史字节前缀 → 显式提示缓存重置。
+        cacheResetNotice = CacheResetNotice(reason: .historyEdited)
+        trackProfileChange()
+
+        var history = activeSession?.messages
+            .filter { !$0.content.isEmpty || !$0.attachments.isEmpty || !$0.documentAttachments.isEmpty } ?? []
+
+        let systemPrompt = buildSystemPrompt(for: config, personalizationCollection: activeSession?.isPersonalizationCollection == true)
+        history.insert(.system(systemPrompt), at: 0)
+
+        if let context = buildContextMessage(for: config, personalizationCollection: activeSession?.isPersonalizationCollection == true) {
+            history.insert(context, at: 1)
+        }
+
+        startGeneration(
+            sessionID: sessionID,
+            config: config,
+            model: config.selectedModel,
+            history: history
+        )
     }
 
     /// Re-generates an assistant reply by deleting it and letting the model
@@ -701,6 +777,7 @@ final class ChatViewModel: ObservableObject {
         let assistantMessageID = assistantMessage.id
 
         isStreaming = true
+        currentToolActivity = nil
 
         // 知识采集会话：Agent 模式锁死关闭 —— 不走工具调用分支，模型拿不到
         // fetch_personalization_block（记忆块）等任何工具，只能按采集 prompt 纯访谈。
@@ -809,6 +886,7 @@ final class ChatViewModel: ObservableObject {
                     self.isStreaming = false
                     self.streamTask = nil
                     self.streamingAssistantID = nil
+                    self.currentToolActivity = nil
                     return
                 }
 
@@ -878,6 +956,7 @@ final class ChatViewModel: ObservableObject {
                 self.isStreaming = false
                 self.streamTask = nil
                 self.streamingAssistantID = nil
+                self.currentToolActivity = nil
 
             } catch is CancellationError {
                 guard self.streamGeneration == generation else { return }
@@ -887,6 +966,7 @@ final class ChatViewModel: ObservableObject {
                 self.streamTask = nil
                 self.streamingAssistantID = nil
                 self.hasReceivedFirstToken = false
+                self.currentToolActivity = nil
 
             } catch {
                 guard self.streamGeneration == generation else { return }
@@ -895,6 +975,7 @@ final class ChatViewModel: ObservableObject {
                 self.streamTask = nil
                 self.streamingAssistantID = nil
                 self.hasReceivedFirstToken = false
+                self.currentToolActivity = nil
 
                 // Remove the placeholder assistant message if nothing arrived.
                 let partial = self.sessions.first(where: { $0.id == sessionID })?
@@ -917,10 +998,9 @@ final class ChatViewModel: ObservableObject {
     /// every occurrence is stripped (the parser accepts any location too).
     /// Consumes a tool-mode `ChatStreamEvent` stream (Agent mode).
     ///
-    /// Tool activity is written straight into the placeholder assistant
-    /// bubble ("🔧 running web_search…"), then the final answer text streams
-    /// normally. In non-streaming mode (`renderAsYouGo == false`) text is
-    /// rendered once at the end, exactly like the plain chat path.
+    /// Tool activity is surfaced as transient UI state (`currentToolActivity`)
+    /// rather than written into the assistant message content, so the persisted
+    /// bubble only ever contains the real answer.
     private func consumeToolEvents(
         _ stream: AsyncThrowingStream<ChatStreamEvent, Error>,
         sessionID: UUID,
@@ -940,6 +1020,7 @@ final class ChatViewModel: ObservableObject {
                 if !hasReceivedFirstToken
                     && !accumulated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     hasReceivedFirstToken = true
+                    currentToolActivity = nil
                 }
                 // Throttle UI updates to ~160 ms (streaming render only).
                 if renderAsYouGo, lastFlush.duration(to: .now) > .milliseconds(160) {
@@ -950,16 +1031,10 @@ final class ChatViewModel: ObservableObject {
                     )
                 }
             case .toolActivity(let toolName):
-                sessionStore.updateLastAssistantContent(
-                    L("agent.tool.running", toolName),
-                    in: sessionID
-                )
+                currentToolActivity = L("agent.tool.running", toolName)
             case .toolFinished(let toolName):
                 if accumulated.isEmpty {
-                    sessionStore.updateLastAssistantContent(
-                        L("agent.tool.done", toolName),
-                        in: sessionID
-                    )
+                    currentToolActivity = L("agent.tool.done", toolName)
                 }
             case .sources(let list):
                 collectedSources.append(contentsOf: list)
@@ -1006,6 +1081,7 @@ final class ChatViewModel: ObservableObject {
         streamTask = nil
         streamingAssistantID = nil
         hasReceivedFirstToken = false
+        currentToolActivity = nil
     }
 
 
@@ -1209,6 +1285,7 @@ final class ChatViewModel: ObservableObject {
         isStreaming = false
         hasReceivedFirstToken = false
         streamingAssistantID = nil
+        currentToolActivity = nil
     }
 
     // MARK: - Error handling
