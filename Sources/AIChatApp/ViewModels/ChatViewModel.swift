@@ -136,11 +136,23 @@ final class ChatViewModel: ObservableObject {
     /// Message id to scroll to + highlight after jumping from a search result.
     @Published var highlightMessageID: UUID?
 
+    /// Search hits computed off the main thread (Sidebar reads this).
+    @Published private(set) var searchResults: [MessageSearchResult] = []
+
+    /// Cancels stale searches when the query/sessions change.
+    private var searchTask: Task<Void, Never>?
+    private var searchGeneration = 0
+
     // MARK: - Internal stream state
 
     /// Cancels the in-flight streaming task (Stop button or replacing the
     /// current generation). Switching sessions deliberately does not cancel it.
     private var streamTask: Task<Void, Never>?
+
+    /// Monotonic id for the current generation. A superseded task whose
+    /// cancellation lands after a newer stream started must not reset the newer
+    /// stream's UI state or delete its placeholder.
+    private var streamGeneration = 0
 
     /// Cancels the in-flight personalization-block synthesis task.
     private var blockGenTask: Task<Void, Never>?
@@ -369,9 +381,12 @@ final class ChatViewModel: ObservableObject {
 
         // 第一轮对话的 AI 通过 set_session_metadata 工具挑选会话 emoji/标题。
         // 全局 sink：工具在后台线程执行，跳回主线程后应用到当前活动会话。
-        ChatTools.sessionMetadataSink = { [weak self] emoji, title in
-            guard let self, let sessionID = self.activeSessionID else { return }
-            self.sessionStore.updateSessionMetadata(emoji: emoji, title: title, in: sessionID)
+        ChatTools.sessionMetadataSink = { [weak self] sessionID, emoji, title in
+            guard let self else { return }
+            // The tool carries the originating session, not necessarily the
+            // session the user is currently viewing (streams survive switching).
+            guard let targetSessionID = sessionID ?? self.activeSessionID else { return }
+            self.sessionStore.updateSessionMetadata(emoji: emoji, title: title, in: targetSessionID)
         }
 
         // 个性化块工具：主线程读 PersonalizationStore，按名字返回内容 / 可用名字列表。
@@ -386,6 +401,12 @@ final class ChatViewModel: ObservableObject {
         // Mirror store changes into this VM (one-way: store → VM).
         sessionStore.$sessions.sink { [weak self] newSessions in
             self?.sessions = newSessions
+            // A new/edited message may match the active query, so refresh the
+            // background search results when a search is open.
+            if let self,
+               !self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                self.scheduleSearch(query: self.searchQuery)
+            }
         }
         .store(in: &cancellables)
 
@@ -495,6 +516,13 @@ final class ChatViewModel: ObservableObject {
     func deleteSession(_ session: ChatSession) {
         cancelStreaming()
         sessionStore.delete(session)
+    }
+
+    /// Deletes every session in one store operation (single persistence write
+    /// instead of per-session full-history rewrites).
+    func deleteAllSessions() {
+        cancelStreaming()
+        sessionStore.deleteAll()
     }
 
     /// Copies a message's text to the system pasteboard.
@@ -657,6 +685,9 @@ final class ChatViewModel: ObservableObject {
         model: String,
         history: [ChatMessage]
     ) {
+        streamGeneration += 1
+        let generation = streamGeneration
+
         // While streaming, skip the per-flush UserDefaults encode + disk write
         // (the main cause of UI stutter); we'll force one save at the end.
         sessionStore.persistPaused = true
@@ -667,6 +698,7 @@ final class ChatViewModel: ObservableObject {
         assistantMessage.model = model
         sessionStore.appendMessage(assistantMessage, to: sessionID)
         streamingAssistantID = assistantMessage.id
+        let assistantMessageID = assistantMessage.id
 
         isStreaming = true
 
@@ -690,16 +722,19 @@ final class ChatViewModel: ObservableObject {
                 // 知识采集会话强制锁死：`!isCollection` 让它绕开整个工具分支，因此不会
                 // 拿到 fetch_personalization_block / webSearch 等任何工具，只能纯访谈。
                 if !isCollection && (configForRequest.toolsEnabled || configForRequest.includeTimestamp) {
-                    // 第一轮对话：历史里还没有任何 assistant 回复。此时才把
-                    // set_session_metadata 广告给模型，让 AI 挑选会话 emoji/标题。
-                    let isFirstRound = history.filter { $0.role == .assistant }.isEmpty
+                    // 只要标题还没被模型定稿就继续提供 set_session_metadata，
+                    // 而不是只在第一轮给一次机会：这样简短开场白之后，模型也能
+                    // 等话题更明确时再补一个高质量标题/emoji。
+                    let targetSession = self.sessions.first(where: { $0.id == sessionID })
+                    let titleStillNeedsModel = targetSession?.hasModelTitle == false
+                        && targetSession?.isPersonalizationCollection != true
                     let toolSet: [BuiltinTool]? = configForRequest.toolsEnabled
                         ? ChatTools.set(
                             latexEnabled: configForRequest.latexEnabled,
-                            includeSessionMetadata: isFirstRound,
+                            includeSessionMetadata: titleStillNeedsModel,
                             includeKnowledge: !personalizationBlocks.isEmpty
                         )
-                        : (isFirstRound
+                        : (titleStillNeedsModel
                             ? [ChatTools.getTime, ChatTools.setSessionMetadata]
                             : [ChatTools.getTime])
                     let stream = try await service.streamChatWithTools(
@@ -707,6 +742,7 @@ final class ChatViewModel: ObservableObject {
                         model: modelForRequest,
                         messages: history,
                         tools: toolSet,
+                        sessionID: sessionID,
                         usageHandler: { [weak self] usage in
                             Task { @MainActor in self?.lastCacheUsage = usage }
                         }
@@ -714,7 +750,8 @@ final class ChatViewModel: ObservableObject {
                     try await self.consumeToolEvents(
                         stream,
                         sessionID: sessionID,
-                        renderAsYouGo: configForRequest.streamEnabled
+                        renderAsYouGo: configForRequest.streamEnabled,
+                        generation: generation
                     )
                     return
                 }
@@ -725,6 +762,7 @@ final class ChatViewModel: ObservableObject {
                 // showing "waiting/generating…"; once the stream ends we write
                 // the full text in one update and Markdown renders exactly once.
                 if !configForRequest.streamEnabled {
+                    guard self.streamGeneration == generation else { return }
                     let stream = try await service.streamChat(
                         config: configForRequest,
                         model: modelForRequest,
@@ -741,6 +779,7 @@ final class ChatViewModel: ObservableObject {
 
                     var accumulated = ""
                     for try await delta in stream {
+                        guard self.streamGeneration == generation else { return }
                         // Continue writing to the originating session even if
                         // the user switches to another conversation.
                         // `delta.content` is already JSON-decoded; real newlines
@@ -754,6 +793,7 @@ final class ChatViewModel: ObservableObject {
                         }
                     }
                     // One-shot render.
+                    guard self.streamGeneration == generation else { return }
                     self.sessionStore.updateLastAssistantContent(
                         Self.finalReply(accumulated),
                         in: sessionID
@@ -774,6 +814,7 @@ final class ChatViewModel: ObservableObject {
 
                 // STREAMING RENDER MODE: `streamChat` yields deltas and we
                 // update the bubble token-by-token (throttled to ~100ms).
+                guard self.streamGeneration == generation else { return }
                 let stream = try await service.streamChat(
                     config: configForRequest,
                     model: modelForRequest,
@@ -793,6 +834,7 @@ final class ChatViewModel: ObservableObject {
                 // SwiftUI redraw every time. We flush at most every 160 ms.
                 var lastFlush = ContinuousClock.now
                 for try await delta in stream {
+                    guard self.streamGeneration == generation else { return }
                     // A session switch must not cancel generation. The store
                     // writes to the originating session, so the completed
                     // answer is available when the user switches back.
@@ -817,6 +859,7 @@ final class ChatViewModel: ObservableObject {
                     }
                 }
                 // Always flush the final accumulated text after the stream ends.
+                guard self.streamGeneration == generation else { return }
                 self.sessionStore.updateLastAssistantContent(
                     Self.finalReply(accumulated),
                     in: sessionID
@@ -837,6 +880,7 @@ final class ChatViewModel: ObservableObject {
                 self.streamingAssistantID = nil
 
             } catch is CancellationError {
+                guard self.streamGeneration == generation else { return }
                 // User cancelled — keep any partial content.
                 self.sessionStore.forcePersist()
                 self.isStreaming = false
@@ -845,6 +889,7 @@ final class ChatViewModel: ObservableObject {
                 self.hasReceivedFirstToken = false
 
             } catch {
+                guard self.streamGeneration == generation else { return }
                 self.sessionStore.forcePersist()
                 self.isStreaming = false
                 self.streamTask = nil
@@ -853,8 +898,10 @@ final class ChatViewModel: ObservableObject {
 
                 // Remove the placeholder assistant message if nothing arrived.
                 let partial = self.sessions.first(where: { $0.id == sessionID })?
-                    .messages.last(where: { $0.role == .assistant })
-                if partial?.content.isEmpty == true {
+                    .messages.first(where: { $0.id == assistantMessageID })
+                if partial?.content.isEmpty == true,
+                   self.sessions.first(where: { $0.id == sessionID })?.messages.last?.id
+                        == assistantMessageID {
                     self.sessionStore.removeLastAssistantMessage(in: sessionID)
                 }
 
@@ -877,7 +924,8 @@ final class ChatViewModel: ObservableObject {
     private func consumeToolEvents(
         _ stream: AsyncThrowingStream<ChatStreamEvent, Error>,
         sessionID: UUID,
-        renderAsYouGo: Bool
+        renderAsYouGo: Bool,
+        generation: Int
     ) async throws {
         var accumulated = ""
         var lastFlush = ContinuousClock.now
@@ -885,6 +933,7 @@ final class ChatViewModel: ObservableObject {
         var toolFlow: [MessageToolCallRecord] = []
 
         for try await event in stream {
+            guard streamGeneration == generation else { return }
             switch event {
             case .text(let delta):
                 accumulated += delta
@@ -925,6 +974,10 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
+        // If this stream was superseded by a newer generation while the tool
+        // loop was finishing, do not attach its output or state to the new one.
+        guard streamGeneration == generation else { return }
+
         // Always flush the final accumulated text after the stream ends.
         sessionStore.updateLastAssistantContent(
             Self.finalReply(accumulated),
@@ -948,6 +1001,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         sessionStore.forcePersist()
+        guard streamGeneration == generation else { return }
         isStreaming = false
         streamTask = nil
         streamingAssistantID = nil
@@ -1055,12 +1109,43 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Full-text search
 
+    /// Debounced entry point used by the sidebar once the user pauses typing.
+    func updateSearchQuery(_ raw: String) {
+        let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        searchQuery = raw
+        scheduleSearch(query: query)
+    }
+
+    /// Cancels an in-flight search and starts a new one on a background task.
+    private func scheduleSearch(query: String) {
+        searchTask?.cancel()
+        searchGeneration += 1
+        let generation = searchGeneration
+
+        guard !query.isEmpty else {
+            searchResults = []
+            return
+        }
+
+        let sessionSnapshot = sessions
+        searchTask = Task.detached(priority: .userInitiated) {
+            let results = Self.buildSearchResults(
+                query: query,
+                sessions: sessionSnapshot
+            )
+            await MainActor.run {
+                guard generation == self.searchGeneration else { return }
+                self.searchResults = results
+            }
+        }
+    }
+
     /// Case-insensitive search across all session titles + message contents.
     /// Returns results ordered by session recency, then by message order.
-    var searchResults: [MessageSearchResult] {
-        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return [] }
-
+    nonisolated private static func buildSearchResults(
+        query: String,
+        sessions: [ChatSession]
+    ) -> [MessageSearchResult] {
         var results: [MessageSearchResult] = []
         for session in sessions {
             for message in session.messages where message.role == .user || message.role == .assistant {
@@ -1094,11 +1179,14 @@ final class ChatViewModel: ObservableObject {
     /// Clears the sidebar search query.
     func clearSearch() {
         searchQuery = ""
+        searchTask?.cancel()
+        searchGeneration += 1
+        searchResults = []
         highlightMessageID = nil
     }
 
     /// Builds a short excerpt around the first match of `query` in `content`.
-    private static func searchSnippet(for content: String, query: String) -> String {
+    nonisolated private static func searchSnippet(for content: String, query: String) -> String {
         let flat = content
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)

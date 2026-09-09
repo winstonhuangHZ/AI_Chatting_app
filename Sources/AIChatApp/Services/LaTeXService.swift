@@ -100,6 +100,45 @@ enum LaTeXService {
         var succeeded: Bool { pdfURL != nil }
     }
 
+    /// Per-engine-pass timeout. TeX can loop for a long time on malformed
+    /// documents; killing the process keeps the app responsive.
+    private static let engineTimeout: TimeInterval = 90
+
+    /// Commands that let a hand-written `.tex` reach into the local filesystem
+    /// or execute shell code. `compile_latex` is documented as a self-contained
+    /// single-document tool, so these are rejected up front.
+    /// (regex pattern, user-facing command name). Word-boundary patterns keep
+    /// benign names like `\includegraphics` from matching `\include`.
+    private static let unsafeCommandPatterns: [(pattern: String, name: String)] = [
+        (#"\\input\b"#, #"\input"#),
+        (#"\\include\b"#, #"\include"#),
+        (#"\\openin\b"#, #"\openin"#),
+        (#"\\read\b"#, #"\read"#),
+        (#"\\IfFileExists\b"#, #"\IfFileExists"#),
+        (#"\\write18"#, #"\write18"#),
+        (#"\\shellescape"#, #"\shellescape"#),
+        (#"\\pdffilesize\b"#, #"\pdffilesize"#),
+        (#"\\filemoddate\b"#, #"\filemoddate"#),
+    ]
+
+    /// Rejects documents that try to read arbitrary local files or run shell
+    /// commands. Comment text is stripped first so prose containing a command
+    /// name does not block a safe document.
+    private static func validateSource(_ source: String) throws {
+        for rawLine in source.components(separatedBy: "\n") {
+            let line = rawLine.split(
+                separator: "%",
+                maxSplits: 1,
+                omittingEmptySubsequences: false
+            ).first.map(String.init) ?? ""
+
+            for item in unsafeCommandPatterns
+            where line.range(of: item.pattern, options: .regularExpression) != nil {
+                throw LaTeXError.unsafeSource(item.name)
+            }
+        }
+    }
+
     /// Writes `source` and compiles it, returning both paths.
     ///
     /// - Parameters:
@@ -109,7 +148,8 @@ enum LaTeXService {
     static func compile(
         source: String,
         filenameStem: String,
-        engine requestedEngine: String? = nil
+        engine requestedEngine: String? = nil,
+        projectName: String? = nil
     ) throws -> CompileResult {
         guard let engineName = requestedEngine.flatMap({ availableEngines[$0] != nil ? $0 : nil })
                 ?? defaultEngine,
@@ -117,10 +157,25 @@ enum LaTeXService {
             throw LaTeXError.noToolchain
         }
 
+        try validateSource(source)
+
         let stem = sanitizedStem(filenameStem)
         // Each job gets its own directory so aux files never collide and the
         // user finds "the PDF plus its source" together.
-        let jobDir = try outputDirectory()
+        let outputRoot = try outputDirectory()
+        let projectDir: URL
+        let trimmedProject = projectName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmedProject.isEmpty {
+            projectDir = outputRoot
+        } else {
+            // Model-selected project name is still restricted to a single
+            // sanitized path component under the app-owned LaTeX root.
+            projectDir = outputRoot.appendingPathComponent(
+                sanitizedStem(trimmedProject),
+                isDirectory: true
+            )
+        }
+        let jobDir = projectDir
             .appendingPathComponent("\(stem)-\(timestamp())", isDirectory: true)
         try FileManager.default.createDirectory(at: jobDir, withIntermediateDirectories: true)
 
@@ -161,6 +216,9 @@ enum LaTeXService {
             // Never stop for input — a missing package would otherwise hang the
             // app forever waiting on stdin.
             "-interaction=nonstopmode",
+            // Hard block shell escape, even if a malicious document or a
+            // package tries to enable it.
+            "-no-shell-escape",
             "-halt-on-error",
             "-file-line-error",
             "\(stem).tex",
@@ -175,12 +233,29 @@ enum LaTeXService {
         process.standardOutput = pipe
         process.standardError = pipe
 
+        // Read on a background queue while the engine runs: a full pipe buffer
+        // would otherwise deadlock the child before we can enforce a timeout.
+        var outputData = Data()
+        let readGroup = DispatchGroup()
+        readGroup.enter()
+        DispatchQueue.global(qos: .utility).async {
+            outputData = pipe.fileHandleForReading.readDataToEndOfFile()
+            readGroup.leave()
+        }
+
         try process.run()
-        // Read before waiting: a full pipe buffer would deadlock the child.
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+
+        let deadline = DispatchTime.now() + engineTimeout
+        if readGroup.wait(timeout: deadline) == .timedOut {
+            // Malformed/hostile document: kill the engine and drain the pipe.
+            process.terminate()
+            process.waitUntilExit()
+            _ = readGroup.wait(timeout: .now() + 5)
+            throw LaTeXError.timeout
+        }
         process.waitUntilExit()
 
-        return String(data: data, encoding: .utf8) ?? ""
+        return String(data: outputData, encoding: .utf8) ?? ""
     }
 
     // MARK: - Result parsing (for the UI card)
@@ -258,13 +333,18 @@ enum LaTeXService {
     /// Errors surfaced to the model as plain text.
     enum LaTeXError: LocalizedError {
         case noToolchain
+        case timeout
+        case unsafeSource(String)
 
         var errorDescription: String? {
             switch self {
             case .noToolchain:
                 return "No LaTeX engine found on this machine."
+            case .timeout:
+                return "LaTeX compilation timed out."
+            case .unsafeSource(let command):
+                return "Compilation blocked: the document uses \(command), which is not allowed by the compile_latex tool."
             }
         }
     }
 }
-

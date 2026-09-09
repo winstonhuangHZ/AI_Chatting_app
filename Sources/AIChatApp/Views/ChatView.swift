@@ -527,6 +527,12 @@ private struct MessageList: View {
     /// must not repeatedly recalculate or take over the user's scroll position.
     @State private var followStreamingContent = false
 
+    /// Message id that the scroll view should keep pinned to the bottom while
+    /// the user is following the latest content. Set whenever a new message
+    /// appears and the viewport is still at the bottom; SwiftUI releases it
+    /// automatically when the user scrolls away.
+    @State private var pinnedMessageID: UUID?
+
     /// Keep the initial view light for very long conversations. Older messages
     /// are loaded in pages as the user reaches the top.
     @State private var visibleMessageCount = 80
@@ -534,6 +540,23 @@ private struct MessageList: View {
     private var visibleMessages: [ChatMessage] {
         let start = max(0, session.messages.count - visibleMessageCount)
         return Array(session.messages[start...])
+    }
+
+    /// True when the bottom sentinel shows that the viewport sits at the
+    /// bottom of the currently laid-out content.
+    private var isNearBottom: Bool {
+        bottomEdgeY != .infinity
+            && viewportHeight > 0
+            && bottomEdgeY <= viewportHeight + 16
+    }
+
+    /// Smoothly scrolls back to the newest message and resumes bottom-following.
+    private func jumpToLatest() {
+        guard let lastID = session.messages.last?.id else { return }
+        followStreamingContent = true
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) {
+            pinnedMessageID = lastID
+        }
     }
 
     // MARK: - Body
@@ -550,11 +573,19 @@ private struct MessageList: View {
                     // 重渲染（实测 30 条 ≈ 21ms/tick vs LazyVStack ≈ 2ms/tick）。
                     LazyVStack(spacing: 14) {
                         if visibleMessageCount < session.messages.count {
-                            Button("Load earlier messages") {
+                            Button(L("load.earlier.messages")) {
+                                // Keep the first currently-visible message pinned
+                                // to the top after prepending an older page.
+                                let anchorID = visibleMessages.first?.id
                                 visibleMessageCount = min(
                                     session.messages.count,
                                     visibleMessageCount + 80
                                 )
+                                if let anchorID {
+                                    DispatchQueue.main.async {
+                                        proxy.scrollTo(anchorID, anchor: .top)
+                                    }
+                                }
                             }
                             .buttonStyle(.borderless)
                             .foregroundStyle(.secondary)
@@ -587,6 +618,9 @@ private struct MessageList: View {
             //   - 流式长高 → 视口跟随真实内容底部
             //   - 用户上翻阅读 → 尊重阅读位置，绝不拽回底部
             .defaultScrollAnchor(.bottom)
+            // 显式钉住最新消息：defaultScrollAnchor 只在首次布局/内容稳定时
+            // 生效，LazyVStack 的真实高度延后补齐时不会自动把视口追到新底部。
+            .scrollPosition(id: $pinnedMessageID, anchor: .bottom)
             .overlay(alignment: .bottom) {
                 GeometryReader { geo in
                     Color.clear.preference(
@@ -595,50 +629,112 @@ private struct MessageList: View {
                     )
                 }
             }
+            // 主流聊天客户端的“回到底部”按钮：只有用户上翻离开最新消息时出现，
+            // 点击后平滑滑回最新回复，不会打断正在流式输出的内容。
+            .overlay(alignment: .bottomTrailing) {
+                if pinnedMessageID == nil,
+                   session.messages.last?.id != nil {
+                    Button {
+                        jumpToLatest()
+                    } label: {
+                        Label(L("jump.to.latest"), systemImage: "arrow.down")
+                            .font(.callout.weight(.medium))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(.regularMaterial, in: Capsule())
+                            .overlay(Capsule().stroke(Color.secondary.opacity(0.2)))
+                            .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 14)
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.85),
+                       value: pinnedMessageID)
             .onPreferenceChange(MessageListBottomEdgeKey.self) { bottomEdgeY = $0 }
             .onPreferenceChange(MessageListViewportHeightKey.self) { viewportHeight = $0 }
+            .onAppear {
+                // Initial conversation: land on the newest message. A following
+                // session switch goes through the session.id handler below.
+                if pinnedMessageID == nil {
+                    pinnedMessageID = session.messages.last?.id
+                }
+            }
             .onChange(of: session.id) { _, _ in
                 visibleMessageCount = 80
                 followStreamingContent = false
+                pinnedMessageID = nil
+                // New content is not laid out yet; re-pin on the next runloop
+                // so LazyVStack has a real bottom to scroll to.
+                let newLastID = session.messages.last?.id
+                DispatchQueue.main.async {
+                    withAnimation(.smooth(duration: 0.25)) {
+                        pinnedMessageID = newLastID
+                    }
+                }
+            }
+            .onChange(of: session.messages.last?.id) { _, newID in
+                // A user/assistant message was appended. Follow it only when the
+                // viewport is already at the bottom; never yank a scrolled-up
+                // reader down to the latest message.
+                guard let newID else {
+                    pinnedMessageID = nil
+                    return
+                }
+                if isNearBottom || pinnedMessageID != nil {
+                    withAnimation(.smooth(duration: 0.25)) {
+                        pinnedMessageID = newID
+                    }
+                }
             }
             .onChange(of: streamingMessageID) { oldID, newID in
                 // Capture the follow mode at generation start. Do not call
                 // scrollTo for streamed text changes: changing the assistant
                 // message height must never pull the user back to the bottom.
                 if oldID == nil, newID != nil {
-                    followStreamingContent = bottomEdgeY <= viewportHeight + 12
+                    followStreamingContent = isNearBottom
+                    if followStreamingContent, let id = session.messages.last?.id {
+                        withAnimation(.smooth(duration: 0.25)) {
+                            pinnedMessageID = id
+                        }
+                    }
                 } else if newID == nil {
+                    // Streaming finished: the bubble switches from lightweight
+                    // Text to MarkdownText in one layout pass. If we were still
+                    // following, re-pin to the finished message so the viewport
+                    // does not drift back into earlier content.
+                    if followStreamingContent || isNearBottom {
+                        withAnimation(.smooth(duration: 0.25)) {
+                            pinnedMessageID = session.messages.last?.id
+                        }
+                    }
                     followStreamingContent = false
                 }
             }
             // 侧栏搜索跳转：居中 + 高亮（用户主动操作，允许动画）。
             .onChange(of: highlightMessageID) { _, newID in
-                if let newID {
+                guard let newID else { return }
+                // A search jump is a deliberate user action: release the
+                // bottom-follow pin so it cannot snap back afterwards.
+                pinnedMessageID = nil
+
+                // If the hit is older than the latest page currently loaded,
+                // widen the window first so the target row actually exists.
+                let windowStart = max(0, session.messages.count - visibleMessageCount)
+                if let index = session.messages.firstIndex(where: { $0.id == newID }),
+                   index < windowStart {
+                    visibleMessageCount = max(1, session.messages.count - index)
+                }
+
+                DispatchQueue.main.async {
                     withAnimation(.smooth(duration: 0.3)) {
                         proxy.scrollTo(newID, anchor: .center)
                     }
                 }
             }
         }
-    }
-}
-
-private struct StreamingTextBubble: View {
-    let text: String
-    let background: Color
-    let appearance: AppearanceStore
-
-    var body: some View {
-        Text(text)
-            .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
-            .foregroundStyle(.primary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(background)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .frame(maxWidth: 620, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

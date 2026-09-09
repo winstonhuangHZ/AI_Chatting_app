@@ -50,6 +50,12 @@ struct BackupBundle: Codable {
     /// 用户画像偏好。
     var userPreferences: [UserPreference]
 
+    /// 账户页显示名（可选，兼容旧备份）。
+    var displayName: String? = nil
+
+    /// 账户页头像 PNG 数据（可选，兼容旧备份）。
+    var avatarData: Data? = nil
+
     /// 外观设置（字体/字号）。
     var appearance: BackupAppearance?
 
@@ -61,6 +67,7 @@ struct BackupBundle: Codable {
 struct BackupAppearance: Codable {
     var fontPreset: String
     var fontSizeLevel: Int
+    var theme: String? = nil
 }
 
 /// 数据导出/导入服务（纯 Foundation，无第三方依赖）。
@@ -68,15 +75,10 @@ enum DataTransferService {
 
     // MARK: - 导出（格式选择）
 
-    /// 弹出保存面板并按所选格式导出一个备份文件。
-    static func exportToFile(
-        format: BackupFormat,
-        sessions: [ChatSession],
-        profiles: [APIServerConfig],
-        preferences: [UserPreference],
-        appearance: AppearanceStore,
-        language: String?
-    ) throws -> URL {
+    /// 弹出保存面板，只负责返回用户选中的目标 URL。
+    /// 实际编码/打包在 `writeExport` 的后台任务中完成，避免阻塞 UI。
+    @MainActor
+    static func presentExportPanel(format: BackupFormat) -> URL? {
         let panel = NSSavePanel()
         panel.title = L("backup.export")
         panel.prompt = L("backup.export")
@@ -84,32 +86,51 @@ enum DataTransferService {
         panel.nameFieldStringValue = "AIChatBackup-\(Self.dateStamp()).\(format.fileExtension)"
         panel.allowedContentTypes = []
 
-        guard panel.runModal() == .OK, let url = panel.url else {
-            throw BackupError.cancelled
-        }
-
-        switch format {
-        case .zip:
-            let data = try export(
-                sessions: sessions,
-                profiles: profiles,
-                preferences: preferences,
-                appearance: appearance,
-                language: language
-            )
-            try data.write(to: url)
-        case .sqlite:
-            try exportSQLite(
-                to: url,
-                sessions: sessions,
-                profiles: profiles,
-                preferences: preferences,
-                appearance: appearance,
-                language: language
-            )
-        }
-        return url
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
     }
+
+    /// 把一个备份写到用户选定的 URL。重活（JSON 编码、zip、SQLite 写盘）
+    /// 全部在后台串行执行，调用方 await 完成后回主线程更新状态。
+    static func writeExport(
+        format: BackupFormat,
+        to url: URL,
+        sessions: [ChatSession],
+        profiles: [APIServerConfig],
+        preferences: [UserPreference],
+        appearance: BackupAppearance,
+        language: String?,
+        displayName: String? = nil,
+        avatarData: Data? = nil
+    ) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            switch format {
+            case .zip:
+                let data = try export(
+                    sessions: sessions,
+                    profiles: profiles,
+                    preferences: preferences,
+                    appearance: appearance,
+                    language: language,
+                    displayName: displayName,
+                    avatarData: avatarData
+                )
+                try data.write(to: url)
+            case .sqlite:
+                try exportSQLite(
+                    to: url,
+                    sessions: sessions,
+                    profiles: profiles,
+                    preferences: preferences,
+                    appearance: appearance,
+                    language: language,
+                    displayName: displayName,
+                    avatarData: avatarData
+                )
+            }
+        }.value
+    }
+
 
     // MARK: - ZIP 导出
 
@@ -118,18 +139,22 @@ enum DataTransferService {
         sessions: [ChatSession],
         profiles: [APIServerConfig],
         preferences: [UserPreference],
-        appearance: AppearanceStore,
-        language: String?
+        appearance: BackupAppearance,
+        language: String?,
+        displayName: String? = nil,
+        avatarData: Data? = nil
     ) throws -> Data {
+        // API keys are kept in the Keychain, so backup files must not contain
+        // plaintext credentials. Same-UUID profiles hydrate their key on restore.
+        let sanitizedProfiles = Self.sanitizedProfiles(profiles)
         let backup = BackupBundle(
             exportedAt: Date(),
             chatSessions: sessions,
-            apiProfiles: profiles,
+            apiProfiles: sanitizedProfiles,
             userPreferences: preferences,
-            appearance: BackupAppearance(
-                fontPreset: appearance.fontPreset.rawValue,
-                fontSizeLevel: appearance.fontSizeLevel.rawValue
-            ),
+            displayName: displayName,
+            avatarData: avatarData,
+            appearance: appearance,
             appLanguage: language
         )
 
@@ -140,7 +165,7 @@ enum DataTransferService {
         // 生成各 JSON 文件的内容。
         let manifestData = try encoder.encode(backup)
         let sessionsData = try encoder.encode(sessions)
-        let profilesData = try encoder.encode(profiles)
+        let profilesData = try encoder.encode(sanitizedProfiles)
         let prefsData = try encoder.encode(preferences)
 
         // 用 FileManager 写临时目录 → 用 /usr/bin/zip 打包 → 读出 Data → 清理。
@@ -187,8 +212,10 @@ enum DataTransferService {
         sessions: [ChatSession],
         profiles: [APIServerConfig],
         preferences: [UserPreference],
-        appearance: AppearanceStore,
-        language: String?
+        appearance: BackupAppearance,
+        language: String?,
+        displayName: String? = nil,
+        avatarData: Data? = nil
     ) throws {
         var db: OpaquePointer?
         guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else {
@@ -214,31 +241,41 @@ enum DataTransferService {
 
         // 会话 & 消息
         for session in sessions {
-            sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil)
-            _ = insertRun(sql: "INSERT OR REPLACE INTO sessions(id, title, created_at) VALUES(?, ?, ?);",
-                          bind: { stmt in
-                sqlite3_bind_text(stmt, 1, (session.id.uuidString as NSString).utf8String, -1, nil)
-                sqlite3_bind_text(stmt, 2, (session.title as NSString).utf8String, -1, nil)
-                sqlite3_bind_double(stmt, 3, session.createdAt.timeIntervalSince1970)
-            }, db: db)
-            for message in session.messages {
-                _ = insertRun(sql: "INSERT OR REPLACE INTO messages(id, session_id, role, content, attachments, timestamp) VALUES(?, ?, ?, ?, ?, ?);",
-                              bind: { stmt in
-                    sqlite3_bind_text(stmt, 1, (message.id.uuidString as NSString).utf8String, -1, nil)
-                    sqlite3_bind_text(stmt, 2, (session.id.uuidString as NSString).utf8String, -1, nil)
-                    sqlite3_bind_text(stmt, 3, (message.role.rawValue as NSString).utf8String, -1, nil)
-                    sqlite3_bind_text(stmt, 4, (message.content as NSString).utf8String, -1, nil)
-                    sqlite3_bind_text(stmt, 5, (Self.jsonString(from: message.attachments) as NSString?)?.utf8String, -1, nil)
-                    sqlite3_bind_double(stmt, 6, message.timestamp.timeIntervalSince1970)
-                }, db: db)
+            guard sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil) == SQLITE_OK else {
+                throw BackupError.sqliteFailed
             }
-            sqlite3_exec(db, "COMMIT;", nil, nil, nil)
+            do {
+                try insertRun(sql: "INSERT OR REPLACE INTO sessions(id, title, created_at) VALUES(?, ?, ?);",
+                              bind: { stmt in
+                    sqlite3_bind_text(stmt, 1, (session.id.uuidString as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(stmt, 2, (session.title as NSString).utf8String, -1, nil)
+                    sqlite3_bind_double(stmt, 3, session.createdAt.timeIntervalSince1970)
+                }, db: db)
+                for message in session.messages {
+                    try insertRun(sql: "INSERT OR REPLACE INTO messages(id, session_id, role, content, attachments, timestamp) VALUES(?, ?, ?, ?, ?, ?);",
+                                  bind: { stmt in
+                        sqlite3_bind_text(stmt, 1, (message.id.uuidString as NSString).utf8String, -1, nil)
+                        sqlite3_bind_text(stmt, 2, (session.id.uuidString as NSString).utf8String, -1, nil)
+                        sqlite3_bind_text(stmt, 3, (message.role.rawValue as NSString).utf8String, -1, nil)
+                        sqlite3_bind_text(stmt, 4, (message.content as NSString).utf8String, -1, nil)
+                        sqlite3_bind_text(stmt, 5, (Self.jsonString(from: message.attachments) as NSString?)?.utf8String, -1, nil)
+                        sqlite3_bind_double(stmt, 6, message.timestamp.timeIntervalSince1970)
+                    }, db: db)
+                }
+                guard sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK else {
+                    _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+                    throw BackupError.sqliteFailed
+                }
+            } catch {
+                _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+                throw error
+            }
         }
 
         // API profiles（每行存完整 JSON，便于恢复）。
-        for profile in profiles {
+        for profile in Self.sanitizedProfiles(profiles) {
             let profileJSON = (try? Self.jsonObjectString(profile)) ?? ""
-            _ = insertRun(sql: "INSERT OR REPLACE INTO api_profiles(id, json) VALUES(?, ?);",
+            try insertRun(sql: "INSERT OR REPLACE INTO api_profiles(id, json) VALUES(?, ?);",
                           bind: { stmt in
                 sqlite3_bind_text(stmt, 1, (profile.id.uuidString as NSString).utf8String, -1, nil)
                 sqlite3_bind_text(stmt, 2, (profileJSON as NSString).utf8String, -1, nil)
@@ -248,7 +285,7 @@ enum DataTransferService {
         // 用户偏好
         for pref in preferences {
             let prefJSON = (try? Self.jsonObjectString(pref)) ?? ""
-            _ = insertRun(sql: "INSERT OR REPLACE INTO user_preferences(id, json) VALUES(?, ?);",
+            try insertRun(sql: "INSERT OR REPLACE INTO user_preferences(id, json) VALUES(?, ?);",
                           bind: { stmt in
                 sqlite3_bind_text(stmt, 1, (pref.id.uuidString as NSString).utf8String, -1, nil)
                 sqlite3_bind_text(stmt, 2, (prefJSON as NSString).utf8String, -1, nil)
@@ -256,26 +293,52 @@ enum DataTransferService {
         }
 
         // 外观 / 语言
-        if let appearanceJSON = try? JSONEncoder().encode(BackupAppearance(fontPreset: appearance.fontPreset.rawValue, fontSizeLevel: appearance.fontSizeLevel.rawValue)),
+        if let appearanceJSON = try? JSONEncoder().encode(appearance),
            let appearanceStr = String(data: appearanceJSON, encoding: .utf8) {
-            _ = insertRun(sql: "INSERT OR REPLACE INTO meta(key, value) VALUES('appearance', ?);",
+            try insertRun(sql: "INSERT OR REPLACE INTO meta(key, value) VALUES('appearance', ?);",
                           bind: { stmt in
                 sqlite3_bind_text(stmt, 1, (appearanceStr as NSString).utf8String, -1, nil)
             }, db: db)
         }
         if let language {
-            _ = insertRun(sql: "INSERT OR REPLACE INTO meta(key, value) VALUES('language', ?);",
+            try insertRun(sql: "INSERT OR REPLACE INTO meta(key, value) VALUES('language', ?);",
                           bind: { stmt in
                 sqlite3_bind_text(stmt, 1, (language as NSString).utf8String, -1, nil)
+            }, db: db)
+        }
+
+        // Full-fidelity snapshot: the columnar tables above intentionally stay
+        // readable/backward-compatible, but messages and sessions carry many
+        // fields (sources, usage, tool flow, PDF documents, reasoning, emoji,
+        // collection flag, …) that do not fit those columns. Keep the complete
+        // bundle in meta so a SQLite round-trip loses nothing.
+        let fullBackup = BackupBundle(
+            exportedAt: Date(),
+            chatSessions: sessions,
+            apiProfiles: Self.sanitizedProfiles(profiles),
+            userPreferences: preferences,
+            displayName: displayName,
+            avatarData: avatarData,
+            appearance: appearance,
+            appLanguage: language
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        if let backupData = try? encoder.encode(fullBackup),
+           let backupJSON = String(data: backupData, encoding: .utf8) {
+            try insertRun(sql: "INSERT OR REPLACE INTO meta(key, value) VALUES('backup_json', ?);",
+                          bind: { stmt in
+                sqlite3_bind_text(stmt, 1, (backupJSON as NSString).utf8String, -1, nil)
             }, db: db)
         }
     }
 
     // MARK: - 导入（自动识别格式）
 
-    /// 弹出打开面板，选择 zip 或 sqlite 备份，自动按扩展名识别解析。
-    static func importFromFile() throws -> BackupBundle {
-        // 先弹出格式选择（在 BackupRestoreView 已做），这里直接打开面板。
+    /// 只负责弹出打开面板并返回所选备份 URL（主线程）。
+    @MainActor
+    static func presentImportPanel() -> URL? {
         let panel = NSOpenPanel()
         panel.title = L("backup.import")
         panel.prompt = L("backup.import")
@@ -284,16 +347,15 @@ enum DataTransferService {
         panel.canChooseFiles = true
         panel.allowedContentTypes = []
 
-        guard panel.runModal() == .OK, let url = panel.url else {
-            throw BackupError.cancelled
-        }
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
 
-        switch url.pathExtension.lowercased() {
-        case BackupFormat.sqlite.fileExtension, "db", "sqlite3":
-            return try importSQLite(from: url)
-        default:
-            return try importFromZIP(url: url)
-        }
+    /// 在后台解析所选备份，避免大文件解压/解码阻塞 UI。
+    static func importBackup(from url: URL) async throws -> BackupBundle {
+        try await Task.detached(priority: .userInitiated) {
+            try importFrom(url: url)
+        }.value
     }
 
     /// 解析特定 URL 的备份（按扩展名自动识别）。
@@ -359,6 +421,14 @@ enum DataTransferService {
             }
         }
         sqlite3_finalize(stmt)
+
+        // Newer backups carry a full JSON snapshot. Prefer it over the legacy
+        // columnar fallback below, which cannot represent every message field.
+        if let json = meta["backup_json"],
+           let data = json.data(using: .utf8),
+           let bundle = try? Self.decodeBackup(from: data) {
+            return bundle
+        }
 
         // 读取 sessions
         var sessions: [ChatSession] = []
@@ -448,6 +518,23 @@ enum DataTransferService {
 
     // MARK: - 辅助
 
+    /// Removes API keys before a profile is written to a backup file. Keys are
+    /// restored from the machine's Keychain by profile UUID when available.
+    private static func sanitizedProfiles(_ profiles: [APIServerConfig]) -> [APIServerConfig] {
+        profiles.map { profile in
+            var copy = profile
+            copy.apiKey = ""
+            return copy
+        }
+    }
+
+    /// Decodes a backup JSON blob (used by the SQLite `backup_json` snapshot).
+    private static func decodeBackup(from data: Data) throws -> BackupBundle {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(BackupBundle.self, from: data)
+    }
+
     private static func dateStamp() -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
@@ -470,15 +557,17 @@ enum DataTransferService {
         sql: String,
         bind: (OpaquePointer) -> Void,
         db: OpaquePointer?
-    ) -> Bool {
+    ) throws {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
-            return false
+            throw BackupError.sqliteFailed
         }
         bind(stmt)
         let rc = sqlite3_step(stmt)
         sqlite3_finalize(stmt)
-        return rc == SQLITE_DONE
+        guard rc == SQLITE_DONE else {
+            throw BackupError.sqliteFailed
+        }
     }
 }
 

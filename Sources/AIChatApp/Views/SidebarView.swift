@@ -15,6 +15,12 @@ struct SidebarView: View {
     /// 界面本地化——语言切换时即时刷新全部文本。
     @EnvironmentObject private var localization: LocalizationManager
 
+    /// 删除全部会话前的二次确认。
+    @State private var confirmDeleteAll = false
+
+    /// 搜索框输入（防抖后写入 ViewModel，避免每次按键全量扫历史）。
+    @State private var searchText = ""
+
     // MARK: - Body
 
     var body: some View {
@@ -29,6 +35,18 @@ struct SidebarView: View {
             }
         }
         .background(appearance.sidebarBackground)
+        .confirmationDialog(
+            L("delete.all.confirm.title"),
+            isPresented: $confirmDeleteAll,
+            titleVisibility: .visible
+        ) {
+            Button(L("delete.all.chats"), role: .destructive) {
+                chatViewModel.deleteAllSessions()
+            }
+            Button(L("cancel"), role: .cancel) {}
+        } message: {
+            Text(L("delete.all.confirm.message"))
+        }
         .safeAreaInset(edge: .top) {
             VStack(spacing: 6) {
                 searchField
@@ -78,9 +96,7 @@ struct SidebarView: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button(role: .destructive) {
-                        for session in chatViewModel.sessions {
-                            chatViewModel.deleteSession(session)
-                        }
+                        confirmDeleteAll = true
                     } label: {
                         Image(systemName: "trash")
                             .help(L("delete.all.chats"))
@@ -106,11 +122,26 @@ struct SidebarView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-            TextField(L("search.placeholder"), text: $chatViewModel.searchQuery)
+            TextField(L("search.placeholder"), text: $searchText)
                 .textFieldStyle(.plain)
                 .font(appearance.fontPreset.font(size: appearance.pointSize - 1))
+                .task(id: searchText) {
+                    // Debounce: full-text search over all sessions runs on the
+                    // main actor, so don't recompute on every keystroke.
+                    let value = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if value.isEmpty {
+                        if !chatViewModel.searchQuery.isEmpty {
+                            chatViewModel.updateSearchQuery("")
+                        }
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(200))
+                    guard !Task.isCancelled else { return }
+                    chatViewModel.updateSearchQuery(searchText)
+                }
             if !chatViewModel.searchQuery.isEmpty {
                 Button {
+                    searchText = ""
                     chatViewModel.clearSearch()
                 } label: {
                     Image(systemName: "xmark.circle.fill")

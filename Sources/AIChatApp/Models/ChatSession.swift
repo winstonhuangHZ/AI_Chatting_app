@@ -23,6 +23,11 @@ struct ChatSession: Identifiable, Codable, Hashable {
     /// "生成个性化块" action that turns the transcript into a named personalization block.
     var isPersonalizationCollection: Bool
 
+    /// `true` once the model has chosen a title via `set_session_metadata`.
+    /// Used to keep offering the title tool after the first round until the
+    /// model actually gives the conversation a real label.
+    var hasModelTitle: Bool
+
     // MARK: - Initializers
 
     init(
@@ -31,7 +36,8 @@ struct ChatSession: Identifiable, Codable, Hashable {
         emoji: String? = nil,
         messages: [ChatMessage] = [],
         createdAt: Date = Date(),
-        isPersonalizationCollection: Bool = false
+        isPersonalizationCollection: Bool = false,
+        hasModelTitle: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -39,10 +45,12 @@ struct ChatSession: Identifiable, Codable, Hashable {
         self.messages = messages
         self.createdAt = createdAt
         self.isPersonalizationCollection = isPersonalizationCollection
+        self.hasModelTitle = hasModelTitle
     }
 
     /// Derives a meaningful title from the first meaningful user message.
     mutating func autoTitle() {
+        guard !hasModelTitle else { return }
         guard title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || title == "New Chat" else {
             return
@@ -70,7 +78,7 @@ struct ChatSession: Identifiable, Codable, Hashable {
     // in the store's `try?` decode. `emoji` is omitted from JSON when nil.
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, emoji, messages, createdAt, isPersonalizationCollection
+        case id, title, emoji, messages, createdAt, isPersonalizationCollection, hasModelTitle
     }
 
     init(from decoder: Decoder) throws {
@@ -81,6 +89,11 @@ struct ChatSession: Identifiable, Codable, Hashable {
         messages = try container.decode([ChatMessage].self, forKey: .messages)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         isPersonalizationCollection = try container.decodeIfPresent(Bool.self, forKey: .isPersonalizationCollection) ?? false
+        let decodedModelTitle = try container.decodeIfPresent(Bool.self, forKey: .hasModelTitle)
+        // Old archives predate the flag: a session with an AI-chosen emoji was
+        // almost certainly titled by the model too, so don't re-prompt for it.
+        let inferredFromEmoji = emoji?.isEmpty == false
+        hasModelTitle = decodedModelTitle ?? inferredFromEmoji
     }
 
     func encode(to encoder: Encoder) throws {
@@ -91,5 +104,6 @@ struct ChatSession: Identifiable, Codable, Hashable {
         try container.encode(messages, forKey: .messages)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(isPersonalizationCollection, forKey: .isPersonalizationCollection)
+        try container.encode(hasModelTitle, forKey: .hasModelTitle)
     }
 }

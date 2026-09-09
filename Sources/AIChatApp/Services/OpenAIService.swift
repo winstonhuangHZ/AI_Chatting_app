@@ -892,6 +892,7 @@ actor OpenAIService {
         model: String,
         messages: [ChatMessage],
         tools toolsOverride: [BuiltinTool]? = nil,
+        sessionID: UUID? = nil,
         usageHandler: ((StreamUsage) -> Void)? = nil
     ) async throws -> AsyncThrowingStream<ChatStreamEvent, Error> {
         let baseURL = try normalizedBaseURL(from: config.baseURL)
@@ -972,7 +973,8 @@ actor OpenAIService {
                             do {
                                 result = try await ChatTools.execute(
                                     name: acc.name,
-                                    argumentsJSON: acc.arguments
+                                    argumentsJSON: acc.arguments,
+                                    sessionID: sessionID
                                 )
                             } catch {
                                 result = "Error executing tool \(toolName): \(error.localizedDescription)"
@@ -1115,7 +1117,7 @@ actor OpenAIService {
 
             let data = String(trimmed.dropFirst("data:".count))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if data == "[DONE]" || data.uppercased().contains("[DONE]") {
+            if data == "[DONE]" {
                 break
             }
             guard let chunkData = data.data(using: .utf8) else { continue }
@@ -1253,7 +1255,7 @@ actor OpenAIService {
 
                         // Graceful termination marker (with tolerance to
                         // relays that append extra whitespace / casing).
-                        if payload == "[DONE]" || payload.uppercased().contains("[DONE]") {
+                        if payload == "[DONE]" {
                             break
                         }
 

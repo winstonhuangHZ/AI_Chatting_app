@@ -78,17 +78,38 @@ final class UserProfileStore: ObservableObject {
 
     // MARK: - CRUD
 
-    /// Adds or updates a preference (matched by category+value).
+    /// Adds or updates a preference (matched by category; changed values
+    /// replace the old entry instead of creating duplicates).
     func upsert(category: String, value: String) {
         let category = category.trimmingCharacters(in: .whitespacesAndNewlines)
         let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !category.isEmpty, !value.isEmpty else { return }
 
-        if let idx = preferences.firstIndex(where: { $0.category == category && $0.value == value }) {
-            preferences[idx].value = value
-            return
+        let key = category.lowercased()
+        var result: [UserPreference] = []
+        var replaced = false
+
+        for preference in preferences {
+            if preference.category.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == key {
+                if !replaced {
+                    // Model update semantics: same category means replace the
+                    // old durable fact, not append a second conflicting copy.
+                    result.append(UserPreference(
+                        id: preference.id,
+                        category: category,
+                        value: value
+                    ))
+                    replaced = true
+                }
+            } else {
+                result.append(preference)
+            }
         }
-        preferences.append(UserPreference(category: category, value: value))
+
+        if !replaced {
+            result.append(UserPreference(category: category, value: value))
+        }
+        preferences = result
     }
 
     /// Removes a single preference.

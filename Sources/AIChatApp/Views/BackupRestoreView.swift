@@ -112,24 +112,45 @@ struct BackupRestoreView: View {
 
     private func exportBackup(format: BackupFormat) {
         isBusy = true
-        defer { isBusy = false }
 
-        do {
-            let url = try DataTransferService.exportToFile(
-                format: format,
-                sessions: sessionStore.sessions,
-                profiles: configStore.configs,
-                preferences: userProfileStore.preferences,
-                appearance: appearance,
-                language: localization.current.rawValue
-            )
-            statusMessage = "\(L("backup.exported")) — \(url.lastPathComponent)"
-            isError = false
-        } catch BackupError.cancelled {
-            // 用户取消，不显示错误。
-        } catch {
-            statusMessage = L("backup.export.failed") + " — \(error.localizedDescription)"
-            isError = true
+        guard let url = DataTransferService.presentExportPanel(format: format) else {
+            isBusy = false
+            return
+        }
+
+        // 快照在主线程收集；重活由 writeExport 放到后台任务。
+        let sessions = sessionStore.sessions
+        let profiles = configStore.configs
+        let preferences = userProfileStore.preferences
+        let backupAppearance = BackupAppearance(
+            fontPreset: appearance.fontPreset.rawValue,
+            fontSizeLevel: appearance.fontSizeLevel.rawValue,
+            theme: appearance.theme.rawValue
+        )
+        let language = localization.current.rawValue
+        let displayName = userProfileStore.displayName
+        let avatarData = userProfileStore.avatarData
+
+        Task { @MainActor in
+            defer { isBusy = false }
+            do {
+                try await DataTransferService.writeExport(
+                    format: format,
+                    to: url,
+                    sessions: sessions,
+                    profiles: profiles,
+                    preferences: preferences,
+                    appearance: backupAppearance,
+                    language: language,
+                    displayName: displayName,
+                    avatarData: avatarData
+                )
+                statusMessage = "\(L("backup.exported")) — \(url.lastPathComponent)"
+                isError = false
+            } catch {
+                statusMessage = L("backup.export.failed") + " — \(error.localizedDescription)"
+                isError = true
+            }
         }
     }
 
@@ -137,33 +158,46 @@ struct BackupRestoreView: View {
         // format 仅用于打开面板时提示（导入时自动按扩展名识别），
         // 这里显式引用避免未使用警告；实际解析由 importFromFile 完成。
         _ = format
+
+        guard let url = DataTransferService.presentImportPanel() else {
+            return
+        }
         isBusy = true
-        defer { isBusy = false }
 
-        do {
-            let bundle = try DataTransferService.importFromFile()
+        Task { @MainActor in
+            defer { isBusy = false }
+            do {
+                let bundle = try await DataTransferService.importBackup(from: url)
 
-            // 应用到各 store（SessionStore/ConfigStore/UserProfileStore/AppearanceStore 均有 replaceAll）。
-            sessionStore.replaceAll(with: bundle.chatSessions)
-            configStore.replaceAll(with: bundle.apiProfiles)
-            userProfileStore.replaceAll(with: bundle.userPreferences)
+                // 应用到各 store（均有 replaceAll）。
+                sessionStore.replaceAll(with: bundle.chatSessions)
+                configStore.replaceAll(with: bundle.apiProfiles)
+                userProfileStore.replaceAll(with: bundle.userPreferences)
 
-            if let backupAppearance = bundle.appearance {
-                appearance.apply(from: backupAppearance)
+                if let backupAppearance = bundle.appearance {
+                    appearance.apply(from: backupAppearance)
+                }
+
+                if let langStr = bundle.appLanguage,
+                   let lang = AppLanguage(rawValue: langStr) {
+                    localization.current = lang
+                }
+
+                // Account display name / avatar were not part of older backups;
+                // only apply them when the restored backup actually contains them.
+                if let displayName = bundle.displayName {
+                    userProfileStore.displayName = displayName
+                }
+                if let avatarData = bundle.avatarData {
+                    userProfileStore.avatarData = avatarData
+                }
+
+                statusMessage = "\(L("backup.imported")) — \(bundle.chatSessions.count) chats, \(bundle.apiProfiles.count) profiles, \(bundle.userPreferences.count) prefs"
+                isError = false
+            } catch {
+                statusMessage = L("backup.import.failed") + " — \(error.localizedDescription)"
+                isError = true
             }
-
-            if let langStr = bundle.appLanguage,
-               let lang = AppLanguage(rawValue: langStr) {
-                localization.current = lang
-            }
-
-            statusMessage = "\(L("backup.imported")) — \(bundle.chatSessions.count) chats, \(bundle.apiProfiles.count) profiles, \(bundle.userPreferences.count) prefs"
-            isError = false
-        } catch BackupError.cancelled {
-            // 用户取消。
-        } catch {
-            statusMessage = L("backup.import.failed") + " — \(error.localizedDescription)"
-            isError = true
         }
     }
 }

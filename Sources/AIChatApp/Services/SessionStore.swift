@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 
 /// Persists chat sessions (title + full message history) using `UserDefaults`
 /// with a JSON-encoded array.
@@ -11,6 +12,15 @@ final class SessionStore: ObservableObject {
 
     /// `UserDefaults` key recording the selected session UUID string.
     private static let activeIDKey = "activeSessionID"
+
+    /// Serial queue for the expensive full-history JSON encode + UserDefaults
+    /// flush. Encoding 40+ MB of sessions synchronously on the main thread was
+    /// the source of UI freezes on every message append/delete; snapshots are
+    /// captured on the main thread and written here in order.
+    private static let persistQueue = DispatchQueue(
+        label: "com.aichat.app.session-persist",
+        qos: .utility
+    )
 
     // MARK: - Published state
 
@@ -130,6 +140,7 @@ final class SessionStore: ObservableObject {
         }
         if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             sessions[index].title = title
+            sessions[index].hasModelTitle = true
         }
     }
 
@@ -222,11 +233,13 @@ final class SessionStore: ObservableObject {
 
     private func persist() {
         guard !persistPaused else { return }
-        guard let data = try? JSONEncoder().encode(sessions) else { return }
-        let defaults = UserDefaults.standard
-        defaults.set(data, forKey: Self.sessionsKey)
-        // Synchronous flush so chats survive an immediate quit / power loss.
-        defaults.synchronize()
+        let snapshot = sessions
+        Self.persistQueue.async {
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            let defaults = UserDefaults.standard
+            defaults.set(data, forKey: Self.sessionsKey)
+            defaults.synchronize()
+        }
     }
 
     /// Writes once even if persistence was paused (called when streaming ends).

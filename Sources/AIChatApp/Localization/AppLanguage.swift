@@ -57,6 +57,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "chat.count": "%d chat(s)",
         "msgs.count": "%d msgs",
         "msg.count": "%d msg(s)",
+        "load.earlier.messages": "Load earlier messages",
+        "jump.to.latest": "Jump to latest",
         "you": "You",
         "assistant": "Assistant",
         "system": "System",
@@ -149,6 +151,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         // 侧边栏
         "delete.chat": "Delete Chat",
         "delete.all.chats": "Delete all chats",
+        "delete.all.confirm.title": "Delete all chats?",
+        "delete.all.confirm.message": "All conversations on this Mac will be removed permanently. This cannot be undone.",
 
         // 设置 - 列表
         "api.relay.profiles": "API Relay Profiles",
@@ -261,6 +265,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "chat.count": "%d 个会话",
         "msgs.count": "%d 条消息",
         "msg.count": "%d 条消息",
+        "load.earlier.messages": "加载更早的消息",
+        "jump.to.latest": "回到最新",
         "you": "你",
         "assistant": "助手",
         "system": "系统",
@@ -351,6 +357,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
 
         "delete.chat": "删除会话",
         "delete.all.chats": "删除全部会话",
+        "delete.all.confirm.title": "删除全部会话？",
+        "delete.all.confirm.message": "将永久删除本机上的全部会话，此操作无法撤销。",
 
         "api.relay.profiles": "API 中转站配置",
         "add.profile": "添加配置",

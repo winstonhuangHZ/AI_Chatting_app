@@ -17,7 +17,7 @@ struct BuiltinTool {
     let parameters: [String: Any]
 
     /// Executes the tool and returns a plain-text result.
-    let execute: (_ arguments: [String: Any]) async throws -> String
+    let execute: (_ arguments: [String: Any], _ sessionID: UUID?) async throws -> String
 
     /// Extracts structured source references (title + URL) from a tool result,
     /// so the service can render a "Sources" card under the final answer.
@@ -28,7 +28,7 @@ struct BuiltinTool {
         description: String,
         parameters: [String: Any],
         extractSources: @escaping (_ result: String) -> [ChatSource] = { _ in [] },
-        execute: @escaping (_ arguments: [String: Any]) async throws -> String
+        execute: @escaping (_ arguments: [String: Any], _ sessionID: UUID?) async throws -> String
     ) {
         self.name = name
         self.description = description
@@ -43,7 +43,7 @@ enum ChatTools {
 
     /// 由 ChatViewModel 注入的处理函数：应用 AI 在第一轮对话为会话挑选的
     /// emoji 和标题。工具在后台线程执行，通过 `MainActor.run` 跳回主线程调用。
-    @MainActor static var sessionMetadataSink: ((String, String) -> Void)?
+    @MainActor static var sessionMetadataSink: ((UUID?, String, String) -> Void)?
 
     /// 由 ChatViewModel 注入的个性化块解析器：按名字返回个性化块内容，未找到返回 nil。
     /// 供 `fetch_personalization_block` 工具在主线程查询 PersonalizationStore。
@@ -82,10 +82,10 @@ enum ChatTools {
     /// not registered at all, so the model never offers a capability the machine
     /// cannot honour.
     ///
-    /// `includeSessionMetadata` is `true` only for the FIRST exchange of a new
-    /// conversation: that's the only time the model is allowed to pick the
-    /// conversation's emoji + title. Later rounds omit the tool so the model
-    /// never rewrites the identity mid-conversation.
+    /// `includeSessionMetadata` is `true` while the session's title has not yet
+    /// been chosen by the model. The app keeps offering it (even after several
+    /// exchanges) until the model actually picks a title/emoji, so short
+    /// greetings do not leave the conversation permanently unlabeled.
     ///
     /// `includeKnowledge` is `true` whenever at least one personalization block exists:
     /// that's when `fetch_personalization_block` is useful.
@@ -113,10 +113,12 @@ enum ChatTools {
     static let setSessionMetadata = BuiltinTool(
         name: "set_session_metadata",
         description: """
-        Call this tool exactly ONCE, at the start of the very FIRST exchange of a brand-new \
-        conversation, to give the conversation an identity. Choose a concise title (no more than \
-        24 characters, in the user's language, summarizing what they asked about) and ONE emoji \
-        that best captures the topic. Never call it again in later turns.
+        Call this tool when it is offered and the conversation still lacks an AI-chosen title. \
+        It is offered whenever the app wants you to give the conversation an identity, usually \
+        after the user's first real request becomes clear. Choose a concise title (no more than \
+        24 characters, in the user's language, summarizing the conversation topic) and ONE emoji \
+        that best captures it. Call it exactly once per conversation, before composing your answer; \
+        after you call it the app will stop offering it.
         """,
         parameters: [
             "type": "object",
@@ -126,12 +128,12 @@ enum ChatTools {
             ],
             "required": ["title", "emoji"],
         ],
-        execute: { arguments in
+        execute: { arguments, sessionID in
             let title = (arguments["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let emoji = (arguments["emoji"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !title.isEmpty else { return "Error: title must not be empty." }
             await MainActor.run {
-                ChatTools.sessionMetadataSink?(emoji, title)
+                ChatTools.sessionMetadataSink?(sessionID, emoji, title)
             }
             return "已为对话设置标题“\(title)”、emoji“\(emoji.isEmpty ? "（无）" : emoji)”。"
         }
@@ -159,7 +161,7 @@ enum ChatTools {
             ],
             "required": ["name"],
         ],
-        execute: { arguments in
+        execute: { arguments, _ in
             let name = (arguments["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !name.isEmpty else { return "Error: name must not be empty." }
             let content = await MainActor.run { ChatTools.personalizationResolver?(name) }
@@ -204,21 +206,31 @@ enum ChatTools {
                     "type": "string",
                     "description": "Optional engine: xelatex (default, best for CJK), pdflatex or lualatex.",
                 ],
+                "project": [
+                    "type": "string",
+                    "description": "Optional project/subfolder name, e.g. \"AP Research\" or \"线性代数作业\". The app creates LaTeX/<project>/ under its output directory so files from different tasks stay organized.",
+                ],
             ],
             "required": ["source"],
         ],
         extractSources: { result in LaTeXService.parseArtifacts(from: result) }
-    ) { arguments in
+    ) { arguments, _ in
         guard let source = arguments["source"] as? String,
               !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Error: missing \"source\" argument."
         }
         let stem = (arguments["filename"] as? String) ?? "document"
         let engine = arguments["engine"] as? String
+        let project = arguments["project"] as? String
 
         let result: LaTeXService.CompileResult
         do {
-            result = try LaTeXService.compile(source: source, filenameStem: stem, engine: engine)
+            result = try LaTeXService.compile(
+                source: source,
+                filenameStem: stem,
+                engine: engine,
+                projectName: project
+            )
         } catch {
             return "Error: LaTeX compilation could not start — \(error.localizedDescription)"
         }
@@ -258,7 +270,7 @@ enum ChatTools {
             "type": "object",
             "properties": [:],
         ]
-    ) { _ in
+    ) { _, _ in
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
@@ -267,7 +279,7 @@ enum ChatTools {
 
     /// Executes a tool by name. Unknown tools / failures return a plain-text
     /// error string the model can read and adjust to.
-    static func execute(name: String, argumentsJSON: String) async throws -> String {
+    static func execute(name: String, argumentsJSON: String, sessionID: UUID?) async throws -> String {
         guard let tool = allWithOptional.first(where: { $0.name == name }) else {
             return "Error: unknown tool \"\(name)\"."
         }
@@ -276,7 +288,7 @@ enum ChatTools {
            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             arguments = object
         }
-        return try await tool.execute(arguments)
+        return try await tool.execute(arguments, sessionID)
     }
 
     /// Returns the source references (title + URL) a tool attached to its result,
@@ -299,7 +311,7 @@ enum ChatTools {
             "required": ["url"],
         ],
         extractSources: { result in WebPageReader.parseSource(from: result) }
-    ) { arguments in
+    ) { arguments, _ in
         guard let url = arguments["url"] as? String,
               !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Error: missing \"url\" argument."
@@ -322,7 +334,7 @@ enum ChatTools {
             ],
             "required": ["location"],
         ]
-    ) { arguments in
+    ) { arguments, _ in
         guard let location = arguments["location"] as? String,
               !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Error: missing \"location\" argument."
@@ -345,7 +357,7 @@ enum ChatTools {
             ],
             "required": ["expression"],
         ]
-    ) { arguments in
+    ) { arguments, _ in
         guard let expression = arguments["expression"] as? String,
               !expression.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Error: missing \"expression\" argument."
@@ -374,7 +386,7 @@ enum ChatTools {
             "required": ["query"],
         ],
         extractSources: { result in WebSearch.parseSources(from: result) }
-    ) { arguments in
+    ) { arguments, _ in
         guard let query = arguments["query"] as? String,
               !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "Error: missing \"query\" argument."
@@ -576,8 +588,11 @@ enum WebPageReader {
         guard let url = URL(string: trimmed),
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https",
-              url.host != nil else {
+              let host = url.host else {
             return "Error: invalid URL \"\(trimmed)\". Only http(s) URLs are supported."
+        }
+        if isPrivateHost(host) {
+            return "Error: fetching local/private addresses is not allowed."
         }
 
         var request = URLRequest(url: url)
@@ -607,6 +622,42 @@ enum WebPageReader {
             ? String(text.prefix(maxContentChars)) + "\n…[truncated]"
             : text
         return "Page: \(url.absoluteString)\n\n\(truncated)"
+    }
+
+    /// Blocks loopback, private-network, link-local and mDNS hosts so a model
+    /// (which may be influenced by untrusted fetched pages) cannot use
+    /// `web_fetch` to read local services or router UIs.
+    private static func isPrivateHost(_ host: String) -> Bool {
+        let normalized = host
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            .lowercased()
+
+        if normalized == "localhost"
+            || normalized.hasSuffix(".localhost")
+            || normalized.hasSuffix(".local") {
+            return true
+        }
+
+        // IPv6 loopback / unspecified / link-local / ULA prefixes.
+        if normalized.contains(":") {
+            return normalized == "::1"
+                || normalized == "::"
+                || normalized.hasPrefix("fe80:")
+                || normalized.hasPrefix("fc")
+                || normalized.hasPrefix("fd")
+                || normalized.hasPrefix("::ffff:127.")
+        }
+
+        let octets = normalized.split(separator: ".").prefix(4).compactMap { Int($0) }
+        guard octets.count >= 2 else { return false }
+        switch octets[0] {
+        case 0, 10, 127, 169, 192:
+            return true
+        case 172:
+            return (16...31).contains(octets[1])
+        default:
+            return false
+        }
     }
 
     /// Parses the leading `Page: <url>` line of a `read()` result into a source
@@ -793,4 +844,3 @@ enum Weather {
         }
     }
 }
-

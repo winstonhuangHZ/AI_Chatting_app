@@ -47,7 +47,7 @@ final class ConfigStore: ObservableObject {
 
         if let data = defaults.data(forKey: Self.configsKey),
            let decoded = try? JSONDecoder().decode([APIServerConfig].self, from: data) {
-            self.configs = decoded
+            self.configs = Self.migrateAndHydrate(decoded)
         } else {
             self.configs = []
         }
@@ -60,6 +60,10 @@ final class ConfigStore: ObservableObject {
             // Default to the first profile if one exists.
             self.activeConfigID = self.configs.first?.id
         }
+
+        // Immediately rewrite the preferences without plaintext keys so the
+        // migration does not wait for the next unrelated profile change.
+        persist()
     }
 
     // MARK: - CRUD operations
@@ -81,6 +85,7 @@ final class ConfigStore: ObservableObject {
     /// If the removed profile was active, switches to the first remaining
     /// profile or clears the active selection.
     func delete(_ config: APIServerConfig) {
+        KeychainService.delete(account: config.id.uuidString)
         configs.removeAll { $0.id == config.id }
 
         if activeConfigID == config.id {
@@ -90,7 +95,22 @@ final class ConfigStore: ObservableObject {
 
     /// Replaces the whole profile list (used when importing a backup).
     func replaceAll(with new: [APIServerConfig]) {
-        configs = new
+        // Remove keychain entries for profiles that no longer exist.
+        let incomingIDs = Set(new.map(\.id))
+        for existing in configs where !incomingIDs.contains(existing.id) {
+            KeychainService.delete(account: existing.id.uuidString)
+        }
+
+        // Restoring a sanitized backup must not wipe keys that still live in
+        // this Mac's Keychain for the same profile UUID.
+        var hydrated = new
+        for index in hydrated.indices where hydrated[index].apiKey.isEmpty {
+            if let key = KeychainService.load(account: hydrated[index].id.uuidString) {
+                hydrated[index].apiKey = key
+            }
+        }
+
+        configs = hydrated
         activeConfigID = configs.first?.id
     }
 
@@ -111,10 +131,49 @@ final class ConfigStore: ObservableObject {
     // MARK: - Persistence
 
     private func persist() {
-        guard let data = try? JSONEncoder().encode(configs) else { return }
+        // API keys live in the Keychain, never in UserDefaults / plaintext
+        // files. Only blank a key in the encoded copy after the Keychain
+        // confirmed it stored the secret; otherwise we would erase the last
+        // remaining copy of the key on a transient Keychain failure.
+        let sanitized = configs.map { config -> APIServerConfig in
+            var copy = config
+            if config.apiKey.isEmpty {
+                KeychainService.delete(account: config.id.uuidString)
+            } else if KeychainService.save(config.apiKey, account: config.id.uuidString) {
+                copy.apiKey = ""
+            }
+            return copy
+        }
+        guard let data = try? JSONEncoder().encode(sanitized) else { return }
         let defaults = UserDefaults.standard
         defaults.set(data, forKey: Self.configsKey)
         // Synchronous flush so profiles survive an immediate quit / power loss.
         defaults.synchronize()
+    }
+
+    /// Decodes profiles that may still contain legacy plaintext keys in
+    /// UserDefaults: migrates each key into the Keychain, then loads the
+    /// current key from the Keychain so in-memory profiles stay usable.
+    private static func migrateAndHydrate(_ raw: [APIServerConfig]) -> [APIServerConfig] {
+        raw.map { config in
+            var result = config
+
+            if !config.apiKey.isEmpty {
+                // Legacy plaintext from an older build: move it to the Keychain
+                // before wiping it from the UserDefaults copy.
+                if KeychainService.save(config.apiKey, account: config.id.uuidString) {
+                    result.apiKey = ""
+                }
+            }
+
+            // If a key is already in the Keychain (either just migrated or
+            // written by a previous launch), hydrate the in-memory profile.
+            if result.apiKey.isEmpty,
+               let keychainKey = KeychainService.load(account: config.id.uuidString) {
+                result.apiKey = keychainKey
+            }
+
+            return result
+        }
     }
 }

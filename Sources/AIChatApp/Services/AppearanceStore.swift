@@ -334,6 +334,10 @@ final class AppearanceStore: ObservableObject {
         if let level = FontSizeLevel(rawValue: backup.fontSizeLevel) {
             fontSizeLevel = level
         }
+        if let rawTheme = backup.theme,
+           let restoredTheme = ChatTheme(rawValue: rawTheme) {
+            theme = restoredTheme
+        }
     }
 
     /// 是否在设置界面开放字体预设选择。
