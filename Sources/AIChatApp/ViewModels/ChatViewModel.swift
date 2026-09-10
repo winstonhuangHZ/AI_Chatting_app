@@ -428,6 +428,12 @@ final class ChatViewModel: ObservableObject {
             guard let self,
                   let folder = self.folderStore.folder(named: name),
                   let targetSessionID = sessionID ?? self.activeSessionID else { return }
+            // Once a conversation has a folder, only the user may move it.
+            // This prevents a single off-topic remark from reclassifying an
+            // established conversation.
+            guard self.sessions.first(where: { $0.id == targetSessionID })?.folderID == nil else {
+                return
+            }
             self.sessionStore.move(sessionID: targetSessionID, to: folder.id)
         }
 
@@ -827,6 +833,22 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Generation pipeline
 
+    /// Tool set for timestamp-only (non-agent) chats.
+    private static func timestampTools(
+        includeMetadata: Bool,
+        includeFolders: Bool
+    ) -> [BuiltinTool] {
+        var tools: [BuiltinTool] = [ChatTools.getTime]
+        if includeMetadata {
+            tools.append(ChatTools.setSessionMetadata)
+        }
+        if includeFolders {
+            tools.append(ChatTools.listSessionFolders)
+            tools.append(ChatTools.assignSessionFolder)
+        }
+        return tools
+    }
+
     /// Starts a generation request (streaming or non-streaming) and wires it to
     /// the placeholder assistant message that appears in the UI.
     ///
@@ -900,13 +922,12 @@ final class ChatViewModel: ObservableObject {
                             latexEnabled: configForRequest.latexEnabled,
                             includeSessionMetadata: titleStillNeedsModel,
                             includeKnowledge: !personalizationBlocks.isEmpty,
-                            includeFolders: true
+                            includeFolders: targetSession?.folderID == nil
                         )
-                        : (titleStillNeedsModel
-                            ? [ChatTools.getTime, ChatTools.setSessionMetadata,
-                               ChatTools.listSessionFolders, ChatTools.assignSessionFolder]
-                            : [ChatTools.getTime,
-                               ChatTools.listSessionFolders, ChatTools.assignSessionFolder])
+                        : Self.timestampTools(
+                            includeMetadata: titleStillNeedsModel,
+                            includeFolders: targetSession?.folderID == nil
+                        )
                     let currentFolderName = targetSession?.folderID.flatMap { folderID in
                         self.folderStore.folders.first(where: { $0.id == folderID })?.name
                     }

@@ -130,9 +130,12 @@ enum ChatTools {
             File the current conversation into a sidebar folder.
             Existing folders: \(existing)
             Current folder: \(current)
-            Prefer an exact existing folder name when one fits; otherwise choose a short new \
-            folder name (≤16 characters, in the user's language) and the app will create it.
-            Call this at most once per conversation, when the topic becomes clear.
+            Only use this when Current folder is "Uncategorized". NEVER move a conversation \
+            that already has a folder — reclassification is the user's job. A single passing \
+            remark, example, or tangentially related message is NOT a topic change; only call \
+            this when the conversation's main subject is consistently clear. Prefer an exact \
+            existing folder name; otherwise choose a short new folder name (≤16 characters, \
+            in the user's language) and the app will create it.
             """
             return BuiltinTool(
                 name: tool.name,
@@ -204,8 +207,10 @@ enum ChatTools {
         description: """
         File the current conversation into a sidebar folder. Use an existing folder name \
         when one fits; if none fits, choose a short new folder name (≤16 characters, in the \
-        user's language). The app creates the folder automatically when the name is new.
-        Call this once when the topic becomes clear.
+        user's language). The app creates the folder automatically when the name is new. \
+        Call this at most once per conversation, only while the conversation is still \
+        Uncategorized; never move an already-filed conversation, and never reclassify based \
+        on a single off-topic message.
         """,
         parameters: [
             "type": "object",
