@@ -484,16 +484,20 @@ enum ChatTools {
         return try await WebSearch.search(query)
     }
 }
-// MARK: - Web search backend (zero-key DuckDuckGo)
+// MARK: - Web search backend (zero-key Bing RSS + DuckDuckGo fallback)
 
 /// Minimal web search without any API key.
 ///
 /// 1. DuckDuckGo Instant Answer API (structured JSON, often sparse).
-/// 2. Falls back to DuckDuckGo HTML results (titles + snippets + links).
+/// 2. Bing's RSS endpoint — reliable for programmatic clients without an API key.
+/// 3. DuckDuckGo HTML (kept as a final fallback; increasingly anti-bot).
 enum WebSearch {
 
     static func search(_ query: String, maxResults: Int = 5) async throws -> String {
         if let result = try? await instantAnswer(query), !result.isEmpty {
+            return result
+        }
+        if let result = try? await bingSearch(query, maxResults: maxResults), !result.isEmpty {
             return result
         }
         return try await htmlSearch(query, maxResults: maxResults)
@@ -583,6 +587,76 @@ enum WebSearch {
     }
 
     // MARK: HTML results
+
+    /// Bing's RSS endpoint is far more stable for programmatic clients than
+    /// scraping DuckDuckGo's HTML (which now returns an empty anti-bot page to
+    /// URLSession). Parsed with a small XML regex because the payload is tiny.
+    private static func bingSearch(_ query: String, maxResults: Int) async throws -> String {
+        guard var components = URLComponents(string: "https://www.bing.com/search") else {
+            return ""
+        }
+        components.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "format", value: "rss"),
+            URLQueryItem(name: "count", value: "\(maxResults)"),
+        ]
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 20
+        request.setValue(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            forHTTPHeaderField: "User-Agent"
+        )
+        request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode),
+              let xml = String(data: data, encoding: .utf8)
+                ?? String(data: data, encoding: .isoLatin1) else {
+            return ""
+        }
+
+        let items = matches(in: xml, pattern: #"(?is)<item>(.*?)</item>"#)
+        var results: [ResultItem] = []
+        for item in items.prefix(maxResults) {
+            let title = decodeHTML(
+                matches(in: item, pattern: #"(?is)<title>(.*?)</title>"#).first ?? ""
+            )
+            let url = decodeHTML(
+                matches(in: item, pattern: #"(?is)<link>(.*?)</link>"#).first ?? ""
+            )
+            let snippet = stripTags(
+                decodeHTML(matches(in: item, pattern: #"(?is)<description>(.*?)</description>"#).first ?? "")
+            )
+            guard !url.isEmpty, !title.isEmpty else { continue }
+            results.append(ResultItem(title: title, snippet: snippet, url: url))
+        }
+        guard !results.isEmpty else { return "" }
+
+        var output = "Web search results for \"\(query)\":\n"
+        for (index, result) in results.enumerated() {
+            output += "\(index + 1). \(result.title)\n   \(result.snippet)\n   \(result.url)\n"
+        }
+        return output
+    }
+
+    private static func matches(in text: String, pattern: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard match.numberOfRanges > 1,
+                  let range = Range(match.range(at: 1), in: text) else { return nil }
+            return String(text[range])
+        }
+    }
+
+    private static func stripTags(_ text: String) -> String {
+        var result = text
+        while let range = result.range(of: "<[^>]+>", options: .regularExpression) {
+            result.removeSubrange(range)
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     private struct ResultItem {
         let title: String
