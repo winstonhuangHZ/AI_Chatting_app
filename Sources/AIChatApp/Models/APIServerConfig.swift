@@ -93,6 +93,10 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     /// Optional user override for the active model's context window.
     var contextWindowOverride: Int?
 
+    /// Per-model vision overrides. `true` forces image parts to be sent even
+    /// when the name-based heuristic says the model is text-only.
+    var modelVisionOverrides: [String: Bool]
+
     /// Editable system prompt. Sent as the first `system` message on every
     /// request. The default preset tells the model Markdown is rendered.
     var systemPrompt: String
@@ -175,6 +179,7 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         modelPrices: [String: ModelPrice] = [:],
         modelContextWindows: [String: Int] = [:],
         contextWindowOverride: Int? = nil,
+        modelVisionOverrides: [String: Bool] = [:],
         systemPrompt: String = APIServerConfig.defaultSystemPrompt,
         streamEnabled: Bool = true,
         includeTimestamp: Bool = false,
@@ -191,6 +196,7 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         self.modelPrices = modelPrices
         self.modelContextWindows = modelContextWindows
         self.contextWindowOverride = contextWindowOverride
+        self.modelVisionOverrides = modelVisionOverrides
         self.systemPrompt = systemPrompt
         self.streamEnabled = streamEnabled
         self.includeTimestamp = includeTimestamp
@@ -221,6 +227,7 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         modelPrices = try container.decodeIfPresent([String: ModelPrice].self, forKey: .modelPrices) ?? [:]
         modelContextWindows = try container.decodeIfPresent([String: Int].self, forKey: .modelContextWindows) ?? [:]
         contextWindowOverride = try container.decodeIfPresent(Int.self, forKey: .contextWindowOverride)
+        modelVisionOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .modelVisionOverrides) ?? [:]
         systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
             ?? APIServerConfig.defaultSystemPrompt
         streamEnabled = try container.decodeIfPresent(Bool.self, forKey: .streamEnabled) ?? true

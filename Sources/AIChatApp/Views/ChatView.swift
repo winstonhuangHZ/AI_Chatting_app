@@ -147,14 +147,20 @@ struct ChatView: View {
             )
 
             InputBarView(
-                onSend: { text, attachments, documents in
+                onSend: { text, attachments, documents, forceVision in
                     chatViewModel.sendMessage(
                         text,
                         config: configStore.activeConfig,
                         model: configStore.activeConfig?.selectedModel ?? "",
                         attachments: attachments,
-                        documents: documents
+                        documents: documents,
+                        forceVision: forceVision
                     )
+                },
+                activeConfig: configStore.activeConfig,
+                onVisionOverride: { model, enabled in
+                    guard let configID = configStore.activeConfigID else { return }
+                    configStore.setVisionOverride(enabled, for: model, configID: configID)
                 },
                 isStreaming: chatViewModel.isStreaming,
                 dropRouter: dropRouter
@@ -1696,7 +1702,9 @@ private final class ChatDropRouter: ObservableObject {
 /// - Thumbnail previews can be removed before sending.
 private struct InputBarView: View {
 
-    let onSend: (String, [ImageAttachment], [DocumentAttachment]) -> Void
+    let onSend: (String, [ImageAttachment], [DocumentAttachment], Bool) -> Void
+    let activeConfig: APIServerConfig?
+    let onVisionOverride: (String, Bool) -> Void
     let isStreaming: Bool
 
     /// 拖拽上传中转桥（父级聊天面板的 drop 转发到这里）。
@@ -1711,6 +1719,14 @@ private struct InputBarView: View {
     @State private var draft = ""
     @State private var pendingAttachments: [ImageAttachment] = []
     @State private var pendingDocuments: [DocumentAttachment] = []
+    @State private var pendingVisionSend: PendingVisionSend?
+    @State private var showVisionOverridePrompt = false
+
+    private struct PendingVisionSend {
+        let text: String
+        let attachments: [ImageAttachment]
+        let documents: [DocumentAttachment]
+    }
 
     /// 支持直接拖入的图片扩展名（与上传按钮一致）。
     private static let imageExtensions: Set<String> =
@@ -1803,6 +1819,29 @@ private struct InputBarView: View {
                 dropRouter.onDrop = nil
             }
         }
+        .confirmationDialog(
+            L("vision.override.title"),
+            isPresented: $showVisionOverridePrompt,
+            titleVisibility: .visible
+        ) {
+            Button(L("vision.override.once")) {
+                finishPendingVisionSend(forceVision: true, keepImages: true)
+            }
+            Button(L("vision.override.always")) {
+                if let model = activeConfig?.selectedModel {
+                    onVisionOverride(model, true)
+                }
+                finishPendingVisionSend(forceVision: false, keepImages: true)
+            }
+            Button(L("vision.override.without")) {
+                finishPendingVisionSend(forceVision: false, keepImages: false)
+            }
+            Button(L("cancel"), role: .cancel) {
+                pendingVisionSend = nil
+            }
+        } message: {
+            Text(L("vision.override.message", activeConfig?.selectedModel ?? ""))
+        }
         .onChange(of: chatViewModel.quotedText) { _, newValue in
             guard newValue != nil,
                   let quoted = chatViewModel.takeQuotedText() else { return }
@@ -1830,10 +1869,51 @@ private struct InputBarView: View {
 
         let attachments = pendingAttachments
         let documents = pendingDocuments
+
+        // Images are normally dropped for text-only models. Ask the user before
+        // silently ignoring them when the model is not recognized as multimodal.
+        if !attachments.isEmpty, !currentModelSupportsVision {
+            pendingVisionSend = PendingVisionSend(
+                text: text,
+                attachments: attachments,
+                documents: documents
+            )
+            showVisionOverridePrompt = true
+            return
+        }
+
+        performSend(text, attachments: attachments, documents: documents, forceVision: false)
+    }
+
+    private var currentModelSupportsVision: Bool {
+        guard let config = activeConfig else { return false }
+        return MultimodalSupport.isMultimodal(
+            config.selectedModel,
+            overrides: config.modelVisionOverrides
+        )
+    }
+
+    private func finishPendingVisionSend(forceVision: Bool, keepImages: Bool) {
+        guard let pending = pendingVisionSend else { return }
+        pendingVisionSend = nil
+        performSend(
+            pending.text,
+            attachments: keepImages ? pending.attachments : [],
+            documents: pending.documents,
+            forceVision: forceVision
+        )
+    }
+
+    private func performSend(
+        _ text: String,
+        attachments: [ImageAttachment],
+        documents: [DocumentAttachment],
+        forceVision: Bool
+    ) {
         draft = ""
         pendingAttachments = []
         pendingDocuments = []
-        onSend(text, attachments, documents)
+        onSend(text, attachments, documents, forceVision)
     }
 
     private func removeAttachment(_ attachment: ImageAttachment) {

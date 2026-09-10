@@ -39,6 +39,13 @@ enum MultimodalSupport {
         return visionKeywords.contains { lower.contains($0) }
     }
 
+    /// Resolves a model's vision capability with a user override taking
+    /// precedence over the name heuristic.
+    static func isMultimodal(_ modelID: String, overrides: [String: Bool]) -> Bool {
+        if let override = overrides[modelID] { return override }
+        return isMultimodal(modelID)
+    }
+
     /// Returns a display label: multimodal models get a subtle `photo` marker
     /// rendered by the UI (see the model pickers) — this just returns the name
     /// so the UI can compose an icon + name. Kept for callers that want a plain

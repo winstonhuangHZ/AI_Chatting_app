@@ -588,6 +588,27 @@ private struct ProfileEditView: View {
                     Text(L("context.window.footer"))
                 }
 
+                if !draft.modelVisionOverrides.isEmpty {
+                    Section {
+                        ForEach(draft.modelVisionOverrides.keys.sorted(), id: \.self) { model in
+                            HStack {
+                                Label(model, systemImage: "photo")
+                                Spacer()
+                                Button(role: .destructive) {
+                                    draft.modelVisionOverrides.removeValue(forKey: model)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+                    } header: {
+                        Text(L("vision.overrides"))
+                    } footer: {
+                        Text(L("vision.overrides.footer"))
+                    }
+                }
+
                 Section {
                     Toggle(L("custom.price.enable"), isOn: customPriceEnabled)
                     if customPriceEnabled.wrappedValue {

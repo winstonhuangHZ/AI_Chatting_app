@@ -141,6 +141,17 @@ final class ConfigStore: ObservableObject {
         configs[index].baseURL = normalizedBaseURL.absoluteString
     }
 
+    /// Persists a per-model vision override ("always send images").
+    func setVisionOverride(_ enabled: Bool?, for model: String, configID: UUID) {
+        guard !model.isEmpty,
+              let index = configs.firstIndex(where: { $0.id == configID }) else { return }
+        if let enabled {
+            configs[index].modelVisionOverrides[model] = enabled
+        } else {
+            configs[index].modelVisionOverrides.removeValue(forKey: model)
+        }
+    }
+
     // MARK: - Persistence
 
     private func persist() {

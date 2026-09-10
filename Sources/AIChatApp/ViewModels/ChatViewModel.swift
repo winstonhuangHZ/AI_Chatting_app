@@ -775,7 +775,8 @@ final class ChatViewModel: ObservableObject {
         config: APIServerConfig?,
         model: String,
         attachments: [ImageAttachment] = [],
-        documents: [DocumentAttachment] = []
+        documents: [DocumentAttachment] = [],
+        forceVision: Bool = false
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // Allow sending when either text or at least one attachment is present.
@@ -827,7 +828,8 @@ final class ChatViewModel: ObservableObject {
             sessionID: sessionID,
             config: config,
             model: model,
-            history: history
+            history: history,
+            forceVision: forceVision
         )
     }
 
@@ -859,7 +861,8 @@ final class ChatViewModel: ObservableObject {
         config: APIServerConfig,
         model: String,
         history: [ChatMessage],
-        reusingAssistantID: UUID? = nil
+        reusingAssistantID: UUID? = nil,
+        forceVision: Bool = false
     ) {
         streamGeneration += 1
         let generation = streamGeneration
@@ -898,6 +901,9 @@ final class ChatViewModel: ObservableObject {
         let service = service
         let configForRequest = config
         let modelForRequest = model
+        let visionOverride: Bool? = forceVision
+            ? true
+            : configForRequest.modelVisionOverrides[modelForRequest]
 
         streamTask = Task { [weak self] in
             guard let self else { return }
@@ -944,6 +950,7 @@ final class ChatViewModel: ObservableObject {
                         messages: history,
                         tools: toolSet,
                         sessionID: sessionID,
+                        visionOverride: visionOverride,
                         usageHandler: { [weak self] usage in
                             Task { @MainActor in self?.lastCacheUsage = usage }
                         }
@@ -968,6 +975,7 @@ final class ChatViewModel: ObservableObject {
                         config: configForRequest,
                         model: modelForRequest,
                         messages: history,
+                        visionOverride: visionOverride,
                         usageHandler: { [weak self] usage in
                             Task { @MainActor in self?.lastCacheUsage = usage }
                         },
@@ -1022,6 +1030,7 @@ final class ChatViewModel: ObservableObject {
                     config: configForRequest,
                     model: modelForRequest,
                     messages: history,
+                    visionOverride: visionOverride,
                     usageHandler: { [weak self] usage in
                         Task { @MainActor in self?.lastCacheUsage = usage }
                     },

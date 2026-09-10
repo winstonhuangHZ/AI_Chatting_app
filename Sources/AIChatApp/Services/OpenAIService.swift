@@ -654,9 +654,10 @@ actor OpenAIService {
     ///   - text-only → extracted text as a content part
     private static func payloadMessages(
         from messages: [ChatMessage],
-        model: String
+        model: String,
+        visionOverride: Bool? = nil
     ) async -> [PayloadItem] {
-        let isVision = MultimodalSupport.isMultimodal(model)
+        let isVision = visionOverride ?? MultimodalSupport.isMultimodal(model)
         var result: [PayloadItem] = []
 
         for message in messages {
@@ -928,6 +929,7 @@ actor OpenAIService {
         messages: [ChatMessage],
         tools toolsOverride: [BuiltinTool]? = nil,
         sessionID: UUID? = nil,
+        visionOverride: Bool? = nil,
         usageHandler: ((StreamUsage) -> Void)? = nil
     ) async throws -> AsyncThrowingStream<ChatStreamEvent, Error> {
         let baseURL = try normalizedBaseURL(from: config.baseURL)
@@ -953,7 +955,11 @@ actor OpenAIService {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    var history = await Self.payloadMessages(from: messages, model: model)
+                    var history = await Self.payloadMessages(
+                        from: messages,
+                        model: model,
+                        visionOverride: visionOverride
+                    )
                     var round = 0
                     var gotFinalAnswer = false
                     var collectedSources: [ChatSource] = []
@@ -1216,6 +1222,7 @@ actor OpenAIService {
         config: APIServerConfig,
         model: String,
         messages: [ChatMessage],
+        visionOverride: Bool? = nil,
         usageHandler: ((StreamUsage) -> Void)? = nil,
         reasoningHandler: ((String) -> Void)? = nil
     ) async throws -> AsyncThrowingStream<String, Error> {
@@ -1240,7 +1247,11 @@ actor OpenAIService {
         // identical payloads produce byte-identical requests → cloud cache works.
         let payload = ChatPayload(
             model: model,
-            messages: await Self.payloadMessages(from: messages, model: model),
+            messages: await Self.payloadMessages(
+                from: messages,
+                model: model,
+                visionOverride: visionOverride
+            ),
             stream: true
         )
 
@@ -1362,7 +1373,8 @@ actor OpenAIService {
     func chatOnce(
         config: APIServerConfig,
         model: String,
-        messages: [ChatMessage]
+        messages: [ChatMessage],
+        visionOverride: Bool? = nil
     ) async throws -> String {
         let baseURL = try normalizedBaseURL(from: config.baseURL)
         guard !config.apiKey.isEmpty else {
@@ -1385,7 +1397,11 @@ actor OpenAIService {
         // DeepSeek-reasoner-compatible relays (thinking needs streaming).
         let payload = ChatPayload(
             model: model,
-            messages: await Self.payloadMessages(from: messages, model: model),
+            messages: await Self.payloadMessages(
+                from: messages,
+                model: model,
+                visionOverride: visionOverride
+            ),
             stream: false,
             enable_thinking: false
         )
