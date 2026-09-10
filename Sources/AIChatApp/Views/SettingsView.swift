@@ -19,6 +19,11 @@ struct SettingsView: View {
     private enum SettingsSection: Hashable {
         case account
         case api
+        case appearance
+        case memory
+        case documents
+        case data
+        case language
     }
 
     var body: some View {
@@ -28,6 +33,17 @@ struct SettingsView: View {
                     .tag(SettingsSection.account)
                 Label(L("api.relay.profiles"), systemImage: "server.rack")
                     .tag(SettingsSection.api)
+                Divider()
+                Label(L("settings.appearance"), systemImage: "textformat")
+                    .tag(SettingsSection.appearance)
+                Label(L("user.profile"), systemImage: "brain")
+                    .tag(SettingsSection.memory)
+                Label(L("pdf.settings.title"), systemImage: "doc.richtext")
+                    .tag(SettingsSection.documents)
+                Label(L("backup.title"), systemImage: "externaldrive")
+                    .tag(SettingsSection.data)
+                Label(L("language.settings"), systemImage: "globe")
+                    .tag(SettingsSection.language)
             }
             .listStyle(.sidebar)
             .navigationTitle(L("settings"))
@@ -38,6 +54,16 @@ struct SettingsView: View {
                     AccountSettingsView()
                 case .api:
                     apiProfileContent
+                case .appearance:
+                    AppearanceSettingsPage()
+                case .memory:
+                    MemorySettingsPage()
+                case .documents:
+                    DocumentsSettingsPage()
+                case .data:
+                    DataSettingsPage()
+                case .language:
+                    LanguageSettingsPage()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -87,6 +113,90 @@ struct SettingsView: View {
             }
         }
         .frame(minWidth: 560, idealWidth: 700, minHeight: 520)
+    }
+}
+
+// MARK: - Account settings
+
+/// Shared page scaffold: title + scrollable content.
+private struct SettingsPage<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title)
+                    .font(.title2.bold())
+                    .padding(16)
+                Divider()
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .navigationTitle(title)
+    }
+}
+
+private struct AppearanceSettingsPage: View {
+    @EnvironmentObject private var appearanceStore: AppearanceStore
+
+    var body: some View {
+        SettingsPage(L("settings.appearance")) {
+            AppearancePickerView()
+                .environmentObject(appearanceStore)
+        }
+    }
+}
+
+private struct MemorySettingsPage: View {
+    @EnvironmentObject private var userProfileStore: UserProfileStore
+
+    var body: some View {
+        SettingsPage(L("user.profile")) {
+            UserProfileSection()
+                .environmentObject(userProfileStore)
+        }
+    }
+}
+
+private struct DocumentsSettingsPage: View {
+    var body: some View {
+        SettingsPage(L("pdf.settings.title")) {
+            PDFSettingsSection()
+        }
+    }
+}
+
+private struct DataSettingsPage: View {
+    @EnvironmentObject private var configStore: ConfigStore
+    @EnvironmentObject private var sessionStore: SessionStore
+    @EnvironmentObject private var userProfileStore: UserProfileStore
+    @EnvironmentObject private var appearanceStore: AppearanceStore
+    @EnvironmentObject private var chatViewModel: ChatViewModel
+
+    var body: some View {
+        SettingsPage(L("backup.title")) {
+            BackupRestoreView()
+                .environmentObject(configStore)
+                .environmentObject(sessionStore)
+                .environmentObject(userProfileStore)
+                .environmentObject(appearanceStore)
+                .environmentObject(chatViewModel)
+        }
+    }
+}
+
+private struct LanguageSettingsPage: View {
+    var body: some View {
+        SettingsPage(L("language.settings")) {
+            LanguagePickerView()
+        }
     }
 }
 
@@ -260,38 +370,6 @@ private struct ProfileListView: View {
                     .frame(height: CGFloat(min(configStore.configs.count, 4)) * 100 + 16)
                 }
 
-                Divider()
-
-                // User Profile section: learned personalization preferences.
-                UserProfileSection()
-                    .environmentObject(userProfileStore)
-
-                Divider()
-
-                // Interface appearance: font preset + size.
-                AppearancePickerView()
-                    .environmentObject(appearanceStore)
-
-                Divider()
-
-                // PDF 文档发送：最多渲染页数（0 = 全部页）。
-                PDFSettingsSection()
-
-                Divider()
-
-                // Backup & Restore: export/import all user data as ZIP.
-                BackupRestoreView()
-                    .environmentObject(configStore)
-                    .environmentObject(sessionStore)
-                    .environmentObject(userProfileStore)
-                    .environmentObject(appearanceStore)
-                    .environmentObject(LocalizationManager.shared)
-
-                Divider()
-
-                // Interface language picker (UN official languages).
-                LanguagePickerView()
-                    .environmentObject(LocalizationManager.shared)
             }
         }
     }
