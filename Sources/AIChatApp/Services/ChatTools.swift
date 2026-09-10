@@ -114,6 +114,36 @@ enum ChatTools {
         return tools
     }
 
+    /// Rebuilds the folder-assignment tool with the live folder list injected
+    /// into its description, so the model can choose an existing folder without
+    /// an extra `list_session_folders` round-trip.
+    static func withFolderContext(
+        _ tools: [BuiltinTool],
+        names: [String],
+        currentFolder: String?
+    ) -> [BuiltinTool] {
+        tools.map { tool in
+            guard tool.name == "assign_session_folder" else { return tool }
+            let existing = names.isEmpty ? "none yet" : names.joined(separator: ", ")
+            let current = currentFolder ?? "Uncategorized"
+            let description = """
+            File the current conversation into a sidebar folder.
+            Existing folders: \(existing)
+            Current folder: \(current)
+            Prefer an exact existing folder name when one fits; otherwise choose a short new \
+            folder name (≤16 characters, in the user's language) and the app will create it.
+            Call this at most once per conversation, when the topic becomes clear.
+            """
+            return BuiltinTool(
+                name: tool.name,
+                description: description,
+                parameters: tool.parameters,
+                extractSources: tool.extractSources,
+                execute: tool.execute
+            )
+        }
+    }
+
     // MARK: - set_session_metadata
 
     /// First-round-only tool: lets the AI choose the conversation's emoji and

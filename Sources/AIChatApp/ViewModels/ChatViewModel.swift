@@ -895,7 +895,7 @@ final class ChatViewModel: ObservableObject {
                     let targetSession = self.sessions.first(where: { $0.id == sessionID })
                     let titleStillNeedsModel = targetSession?.hasModelTitle == false
                         && targetSession?.isPersonalizationCollection != true
-                    let toolSet: [BuiltinTool]? = configForRequest.toolsEnabled
+                    var toolSet: [BuiltinTool]? = configForRequest.toolsEnabled
                         ? ChatTools.set(
                             latexEnabled: configForRequest.latexEnabled,
                             includeSessionMetadata: titleStillNeedsModel,
@@ -907,6 +907,16 @@ final class ChatViewModel: ObservableObject {
                                ChatTools.listSessionFolders, ChatTools.assignSessionFolder]
                             : [ChatTools.getTime,
                                ChatTools.listSessionFolders, ChatTools.assignSessionFolder])
+                    let currentFolderName = targetSession?.folderID.flatMap { folderID in
+                        self.folderStore.folders.first(where: { $0.id == folderID })?.name
+                    }
+                    if let base = toolSet {
+                        toolSet = ChatTools.withFolderContext(
+                            base,
+                            names: self.folderStore.names(),
+                            currentFolder: currentFolderName
+                        )
+                    }
                     let stream = try await service.streamChatWithTools(
                         config: configForRequest,
                         model: modelForRequest,
