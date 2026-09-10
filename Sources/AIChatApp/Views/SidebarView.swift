@@ -21,6 +21,9 @@ struct SidebarView: View {
     /// 当前正在重命名/换 emoji 的会话。
     @State private var sessionToEdit: ChatSession?
 
+    /// 文件夹新建/重命名弹窗状态。
+    @State private var folderEditorTarget: FolderEditorTarget?
+
     /// 搜索框输入（防抖后写入 ViewModel，避免每次按键全量扫历史）。
     @State private var searchText = ""
 
@@ -40,6 +43,12 @@ struct SidebarView: View {
         .background(appearance.sidebarBackground)
         .sheet(item: $sessionToEdit) { session in
             SessionIdentitySheet(session: session)
+                .environmentObject(chatViewModel)
+                .environmentObject(appearance)
+                .environmentObject(localization)
+        }
+        .sheet(item: $folderEditorTarget) { target in
+            FolderEditorSheet(target: target)
                 .environmentObject(chatViewModel)
                 .environmentObject(appearance)
                 .environmentObject(localization)
@@ -70,6 +79,12 @@ struct SidebarView: View {
                         chatViewModel.createPersonalizationCollection()
                     } label: {
                         Label(L("kb.add"), systemImage: "brain")
+                    }
+                    Divider()
+                    Button {
+                        folderEditorTarget = .create
+                    } label: {
+                        Label(L("folder.new"), systemImage: "folder.badge.plus")
                     }
                 } label: {
                     HStack(spacing: 4) {
@@ -224,47 +239,109 @@ struct SidebarView: View {
     private var sessionList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(chatViewModel.sidebarSessions) { session in
-                    SidebarRow(
-                        session: session,
-                        isSelected: chatViewModel.activeSessionID == session.id,
-                        onSelect: { chatViewModel.selectSession(id: session.id) }
-                    )
-                    .contextMenu {
-                        Button {
-                            chatViewModel.togglePinSession(session)
+                if chatViewModel.folders.isEmpty {
+                    ForEach(chatViewModel.sidebarSessions) { session in
+                        sessionRow(session)
+                    }
+                } else {
+                    ForEach(chatViewModel.folders) { folder in
+                        DisclosureGroup {
+                            ForEach(chatViewModel.sessions(in: folder.id)) { session in
+                                sessionRow(session)
+                            }
                         } label: {
-                            Label(
-                                L(session.isPinned ? "session.unpin" : "session.pin"),
-                                systemImage: session.isPinned ? "pin.slash" : "pin"
-                            )
+                            folderHeader(folder)
                         }
+                    }
 
-                        Button {
-                            sessionToEdit = session
+                    let uncategorized = chatViewModel.sessions(in: nil)
+                    if !uncategorized.isEmpty {
+                        DisclosureGroup {
+                            ForEach(uncategorized) { session in
+                                sessionRow(session)
+                            }
                         } label: {
-                            Label(L("session.rename"), systemImage: "pencil")
-                        }
-
-                        Divider()
-
-                        Button {
-                            exportPDF(session)
-                        } label: {
-                            Label(L("export.pdf"), systemImage: "arrow.down.doc")
-                        }
-                        .disabled(session.messages.isEmpty)
-
-                        Divider()
-
-                        Button(L("delete.chat"), role: .destructive) {
-                            chatViewModel.deleteSession(session)
+                            Label(L("folder.uncategorized"), systemImage: "tray")
+                                .font(appearance.fontPreset.font(size: appearance.pointSize - 1))
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
+        }
+    }
+
+    @ViewBuilder
+    private func folderHeader(_ folder: ChatFolder) -> some View {
+        Label(folder.name, systemImage: "folder")
+            .font(appearance.fontPreset.font(size: appearance.pointSize - 1))
+            .contextMenu {
+                Button {
+                    folderEditorTarget = .rename(folder)
+                } label: {
+                    Label(L("folder.rename"), systemImage: "pencil")
+                }
+                Button(L("delete"), role: .destructive) {
+                    chatViewModel.deleteFolder(folder)
+                }
+            }
+    }
+
+    @ViewBuilder
+    private func sessionRow(_ session: ChatSession) -> some View {
+        SidebarRow(
+            session: session,
+            isSelected: chatViewModel.activeSessionID == session.id,
+            onSelect: { chatViewModel.selectSession(id: session.id) }
+        )
+        .contextMenu {
+            Button {
+                chatViewModel.togglePinSession(session)
+            } label: {
+                Label(
+                    L(session.isPinned ? "session.unpin" : "session.pin"),
+                    systemImage: session.isPinned ? "pin.slash" : "pin"
+                )
+            }
+
+            Button {
+                sessionToEdit = session
+            } label: {
+                Label(L("session.rename"), systemImage: "pencil")
+            }
+
+            if !chatViewModel.folders.isEmpty {
+                Menu {
+                    Button(L("folder.uncategorized")) {
+                        chatViewModel.moveSession(session, to: nil)
+                    }
+                    Divider()
+                    ForEach(chatViewModel.folders) { folder in
+                        Button(folder.name) {
+                            chatViewModel.moveSession(session, to: folder.id)
+                        }
+                    }
+                } label: {
+                    Label(L("folder.move"), systemImage: "folder")
+                }
+            }
+
+            Divider()
+
+            Button {
+                exportPDF(session)
+            } label: {
+                Label(L("export.pdf"), systemImage: "arrow.down.doc")
+            }
+            .disabled(session.messages.isEmpty)
+
+            Divider()
+
+            Button(L("delete.chat"), role: .destructive) {
+                chatViewModel.deleteSession(session)
+            }
         }
     }
 
@@ -452,6 +529,75 @@ private struct PersonalizationBlockContent: View {
 }
 
 // MARK: - Session identity editor (title + emoji)
+
+private enum FolderEditorTarget: Identifiable {
+    case create
+    case rename(ChatFolder)
+
+    var id: String {
+        switch self {
+        case .create: return "create"
+        case .rename(let folder): return folder.id.uuidString
+        }
+    }
+}
+
+/// Small sheet for creating or renaming a sidebar folder.
+private struct FolderEditorSheet: View {
+    let target: FolderEditorTarget
+
+    @EnvironmentObject private var chatViewModel: ChatViewModel
+    @EnvironmentObject private var appearance: AppearanceStore
+    @EnvironmentObject private var localization: LocalizationManager
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name: String
+
+    init(target: FolderEditorTarget) {
+        self.target = target
+        switch target {
+        case .create:
+            _name = State(initialValue: "")
+        case .rename(let folder):
+            _name = State(initialValue: folder.name)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(target.isNew ? L("folder.new") : L("folder.rename"))
+                .font(.headline)
+            TextField(L("folder.name"), text: $name)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Spacer()
+                Button(L("cancel")) { dismiss() }
+                    .buttonStyle(.bordered)
+                Button(L("save")) {
+                    switch target {
+                    case .create:
+                        chatViewModel.createFolder(named: name)
+                    case .rename(let folder):
+                        chatViewModel.renameFolder(folder, to: name)
+                    }
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(appearance.prominentButtonColor)
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(18)
+        .frame(width: 320)
+    }
+}
+
+private extension FolderEditorTarget {
+    var isNew: Bool {
+        if case .create = self { return true }
+        return false
+    }
+}
 
 /// Sheet used from the sidebar context menu to manually name a conversation
 /// and choose its emoji.

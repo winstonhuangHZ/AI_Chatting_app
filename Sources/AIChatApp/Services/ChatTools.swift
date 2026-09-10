@@ -52,6 +52,12 @@ enum ChatTools {
     /// 返回全部个性化块名字（用于“未找到时的可用列表”提示）。
     @MainActor static var personalizationNames: (() -> [String])?
 
+    /// Current sidebar folder names, so the model can classify into them.
+    @MainActor static var folderNames: (() -> [String])?
+
+    /// Assigns (or creates) a folder for the originating session.
+    @MainActor static var folderAssigner: ((UUID?, String) -> Void)?
+
     /// The base tool set sent on every agent-mode (tool-enabled) request.
     ///
     /// `set_session_metadata` / `fetch_personalization_block` 常驻注册表（保证
@@ -60,6 +66,7 @@ enum ChatTools {
     static let all: [BuiltinTool] = [
         getTime, calc, webSearch, webFetch, weather,
         setSessionMetadata, fetchPersonalizationBlock,
+        listSessionFolders, assignSessionFolder,
     ]
 
     /// The full lookup registry: `all` plus the environment-gated
@@ -92,11 +99,14 @@ enum ChatTools {
     static func set(
         latexEnabled: Bool,
         includeSessionMetadata: Bool = false,
-        includeKnowledge: Bool = false
+        includeKnowledge: Bool = false,
+        includeFolders: Bool = false
     ) -> [BuiltinTool] {
         var tools = all.filter {
             ($0.name != "set_session_metadata" || includeSessionMetadata)
                 && ($0.name != "fetch_personalization_block" || includeKnowledge)
+                && ($0.name != "list_session_folders" || includeFolders)
+                && ($0.name != "assign_session_folder" || includeFolders)
         }
         if latexEnabled && LaTeXService.isAvailable {
             tools.append(compileLaTeX)
@@ -136,6 +146,51 @@ enum ChatTools {
                 ChatTools.sessionMetadataSink?(sessionID, emoji, title)
             }
             return "已为对话设置标题“\(title)”、emoji“\(emoji.isEmpty ? "（无）" : emoji)”。"
+        }
+    )
+
+    // MARK: - assign_session_folder
+
+    /// Lists existing sidebar folders so the model can reuse one instead of
+    /// inventing near-duplicate names.
+    static let listSessionFolders = BuiltinTool(
+        name: "list_session_folders",
+        description: "List the user's existing sidebar folder names. Call this before assign_session_folder when you are unsure which folders already exist.",
+        parameters: [
+            "type": "object",
+            "properties": [:],
+        ]
+    ) { _, _ in
+        let names = await MainActor.run { ChatTools.folderNames?() ?? [] }
+        return names.isEmpty
+            ? "No folders exist yet."
+            : "Existing folders: " + names.joined(separator: ", ")
+    }
+
+    /// Lets the model file this conversation into one of the user's sidebar
+    /// folders. Unknown folder names create a new folder automatically.
+    static let assignSessionFolder = BuiltinTool(
+        name: "assign_session_folder",
+        description: """
+        File the current conversation into a sidebar folder. Use an existing folder name \
+        when one fits; if none fits, choose a short new folder name (≤16 characters, in the \
+        user's language). The app creates the folder automatically when the name is new.
+        Call this once when the topic becomes clear.
+        """,
+        parameters: [
+            "type": "object",
+            "properties": [
+                "name": ["type": "string", "description": "文件夹名称（已有或新名称）"],
+            ],
+            "required": ["name"],
+        ],
+        execute: { arguments, sessionID in
+            let name = (arguments["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !name.isEmpty else { return "Error: folder name must not be empty." }
+            await MainActor.run {
+                ChatTools.folderAssigner?(sessionID, name)
+            }
+            return "已将当前会话归类到文件夹「\(name)」。"
         }
     )
 

@@ -224,6 +224,13 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     /// for tool-call rounds); never shown in the bubble.
     var reasoningContent: String?
 
+    /// Alternative assistant answers for the same prompt (regenerate history).
+    /// Empty for user messages and for assistants that were never regenerated.
+    var versions: [ChatMessageVersion]
+
+    /// Index into `versions` currently shown in the bubble.
+    var activeVersionIndex: Int
+
     // MARK: - Initializers
 
     init(
@@ -237,7 +244,9 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         model: String? = nil,
         usage: MessageUsage? = nil,
         toolFlow: [MessageToolCallRecord] = [],
-        reasoningContent: String? = nil
+        reasoningContent: String? = nil,
+        versions: [ChatMessageVersion] = [],
+        activeVersionIndex: Int = 0
     ) {
         self.id = id
         self.role = role
@@ -250,6 +259,8 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         self.usage = usage
         self.toolFlow = toolFlow
         self.reasoningContent = reasoningContent
+        self.versions = versions
+        self.activeVersionIndex = activeVersionIndex
     }
 
     /// Convenience factory for user messages (with optional image attachments).
@@ -294,5 +305,52 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         usage = try container.decodeIfPresent(MessageUsage.self, forKey: .usage)
         toolFlow = try container.decodeIfPresent([MessageToolCallRecord].self, forKey: .toolFlow) ?? []
         reasoningContent = try container.decodeIfPresent(String.self, forKey: .reasoningContent)
+        versions = try container.decodeIfPresent([ChatMessageVersion].self, forKey: .versions) ?? []
+        activeVersionIndex = try container.decodeIfPresent(Int.self, forKey: .activeVersionIndex)
+            ?? max(0, versions.count - 1)
+    }
+}
+
+/// One stored assistant answer version (ChatGPT-style regenerate history).
+struct ChatMessageVersion: Identifiable, Codable, Hashable {
+    var id: UUID
+    var content: String
+    var timestamp: Date
+    var model: String?
+    var usage: MessageUsage?
+    var sources: [ChatSource]
+    var toolFlow: [MessageToolCallRecord]
+    var reasoningContent: String?
+
+    init(
+        id: UUID = UUID(),
+        content: String,
+        timestamp: Date,
+        model: String?,
+        usage: MessageUsage?,
+        sources: [ChatSource],
+        toolFlow: [MessageToolCallRecord],
+        reasoningContent: String?
+    ) {
+        self.id = id
+        self.content = content
+        self.timestamp = timestamp
+        self.model = model
+        self.usage = usage
+        self.sources = sources
+        self.toolFlow = toolFlow
+        self.reasoningContent = reasoningContent
+    }
+
+    init(message: ChatMessage) {
+        self.init(
+            content: message.content,
+            timestamp: message.timestamp,
+            model: message.model,
+            usage: message.usage,
+            sources: message.sources,
+            toolFlow: message.toolFlow,
+            reasoningContent: message.reasoningContent
+        )
     }
 }

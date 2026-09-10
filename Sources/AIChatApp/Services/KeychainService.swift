@@ -10,6 +10,11 @@ enum KeychainService {
 
     static let service = "com.aichat.app"
 
+    /// Single Keychain account that holds the JSON map of all API keys
+    /// (profile UUID → key). One item means macOS asks for authorization once
+    /// per app build instead of once per relay profile.
+    static let apiKeysAccount = "api-keys-v1"
+
     /// Saves (or replaces) a secret for the given account.
     @discardableResult
     static func save(_ secret: String, account: String) -> Bool {
@@ -65,5 +70,30 @@ enum KeychainService {
         ]
         let status = SecItemDelete(query as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound
+    }
+
+    /// Saves the whole profile-key map as one JSON payload.
+    @discardableResult
+    static func saveSecrets(_ secrets: [String: String]) -> Bool {
+        guard let data = try? JSONEncoder().encode(secrets),
+              let json = String(data: data, encoding: .utf8) else {
+            return false
+        }
+        return save(json, account: apiKeysAccount)
+    }
+
+    /// Loads the profile-key map, or nil when absent/corrupt.
+    static func loadSecrets() -> [String: String]? {
+        guard let json = load(account: apiKeysAccount),
+              let data = json.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode([String: String].self, from: data)
+    }
+
+    /// Removes the shared API-key map.
+    @discardableResult
+    static func deleteSecrets() -> Bool {
+        delete(account: apiKeysAccount)
     }
 }

@@ -28,6 +28,9 @@ struct MarkdownText: View {
     /// Base font size for the rendered content (uses AppearanceStore when nil).
     var fontSize: CGFloat? = nil
 
+    /// Optional handler for “quote and ask” selections inside plain prose.
+    var onQuote: ((String) -> Void)? = nil
+
     // MARK: - Environment
 
     @EnvironmentObject private var appearance: AppearanceStore
@@ -64,7 +67,7 @@ struct MarkdownText: View {
             if isPlainProse, let plain = plainAttributedString {
                 // 纯散文：NSTextView 渲染，整条消息一个可选中整体，
                 // 光标可跨段落拖选复制（SwiftUI Text 跨不了段）。
-                SelectableRichText(attributed: plain)
+                SelectableRichText(attributed: plain, onQuote: onQuote)
             } else {
                 markdownBody
             }
@@ -292,4 +295,3 @@ struct MarkdownText: View {
         pasteboard.setString(string, forType: .string)
     }
 }
-

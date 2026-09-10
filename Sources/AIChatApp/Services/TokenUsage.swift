@@ -247,3 +247,22 @@ enum TokenUsage {
         return String(format: "$%.2f", cost)
     }
 }
+
+/// Best-effort context-window sizes for the common model families. Used only
+/// for the UI usage gauge; unknown models simply hide the bar.
+enum ModelContextWindow {
+    static func size(for model: String) -> Int? {
+        let id = model.lowercased()
+        guard !id.isEmpty else { return nil }
+
+        if id.contains("gemini") { return 1_000_000 }
+        if id.contains("gpt-4.1") { return 1_000_000 }
+        if id.contains("claude") { return 200_000 }
+        if id.contains("deepseek") { return 64_000 }
+        if id.contains("gpt-4o") || id.contains("gpt-4-turbo") { return 128_000 }
+        if id.contains("o1") || id.contains("o3") || id.contains("o4") { return 200_000 }
+        if id.contains("qwen") || id.contains("llama") || id.contains("mistral") { return 128_000 }
+        if id.contains("kimi") || id.contains("moonshot") { return 128_000 }
+        return nil
+    }
+}

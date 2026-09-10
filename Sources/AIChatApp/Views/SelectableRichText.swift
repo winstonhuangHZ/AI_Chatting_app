@@ -11,6 +11,7 @@ import AppKit
 struct SelectableRichText: NSViewRepresentable {
 
     let attributed: NSAttributedString
+    var onQuote: ((String) -> Void)? = nil
 
     // MARK: - Coordinator（链接点击）
 
@@ -28,7 +29,7 @@ struct SelectableRichText: NSViewRepresentable {
     // MARK: - NSView
 
     func makeNSView(context: Context) -> NSTextView {
-        let tv = NSTextView()
+        let tv = QuoteTextView()
         tv.isEditable = false
         tv.isSelectable = true
         tv.drawsBackground = false
@@ -46,10 +47,12 @@ struct SelectableRichText: NSViewRepresentable {
         tv.textContainer?.heightTracksTextView = false
         tv.textContainer?.lineFragmentPadding = 0
         tv.delegate = context.coordinator
+        tv.onQuote = onQuote
         return tv
     }
 
     func updateNSView(_ tv: NSTextView, context: Context) {
+        (tv as? QuoteTextView)?.onQuote = onQuote
         if tv.attributedString() != attributed {
             tv.textStorage?.setAttributedString(attributed)
         }
@@ -73,6 +76,39 @@ struct SelectableRichText: NSViewRepresentable {
         nsView.layoutManager?.ensureLayout(for: nsView.textContainer!)
         let height = ceil(nsView.layoutManager!.usedRect(for: nsView.textContainer!).height) + 1
         return CGSize(width: width, height: height)
+    }
+
+    /// NSTextView subclass that adds a localized “quote and ask” item to the
+    /// standard selection menu.
+    final class QuoteTextView: NSTextView {
+        var onQuote: ((String) -> Void)?
+
+        override func menu(for event: NSEvent) -> NSMenu? {
+            let menu = super.menu(for: event)
+            let range = selectedRange()
+            guard range.length > 0,
+                  let text = (string as NSString?)?.substring(with: range),
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let menu else {
+                return menu
+            }
+            let item = NSMenuItem(
+                title: L("quote.ask"),
+                action: #selector(quoteSelection(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            menu.insertItem(item, at: 0)
+            menu.insertItem(.separator(), at: 1)
+            return menu
+        }
+
+        @objc private func quoteSelection(_ sender: Any?) {
+            let range = selectedRange()
+            guard range.length > 0,
+                  let text = (string as NSString?)?.substring(with: range) else { return }
+            onQuote?(text)
+        }
     }
 }
 
@@ -286,4 +322,3 @@ enum PlainMarkdownBuilder {
         return nil
     }
 }
-

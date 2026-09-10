@@ -31,6 +31,9 @@ struct ChatSession: Identifiable, Codable, Hashable {
     /// `true` when the user pinned this conversation to the top of the sidebar.
     var isPinned: Bool
 
+    /// Sidebar folder id (nil = unclassified).
+    var folderID: UUID?
+
     // MARK: - Initializers
 
     init(
@@ -41,7 +44,8 @@ struct ChatSession: Identifiable, Codable, Hashable {
         createdAt: Date = Date(),
         isPersonalizationCollection: Bool = false,
         hasModelTitle: Bool = false,
-        isPinned: Bool = false
+        isPinned: Bool = false,
+        folderID: UUID? = nil
     ) {
         self.id = id
         self.title = title
@@ -51,6 +55,7 @@ struct ChatSession: Identifiable, Codable, Hashable {
         self.isPersonalizationCollection = isPersonalizationCollection
         self.hasModelTitle = hasModelTitle
         self.isPinned = isPinned
+        self.folderID = folderID
     }
 
     /// Derives a meaningful title from the first meaningful user message.
@@ -83,7 +88,7 @@ struct ChatSession: Identifiable, Codable, Hashable {
     // in the store's `try?` decode. `emoji` is omitted from JSON when nil.
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, emoji, messages, createdAt, isPersonalizationCollection, hasModelTitle, isPinned
+        case id, title, emoji, messages, createdAt, isPersonalizationCollection, hasModelTitle, isPinned, folderID
     }
 
     init(from decoder: Decoder) throws {
@@ -100,6 +105,7 @@ struct ChatSession: Identifiable, Codable, Hashable {
         let inferredFromEmoji = emoji?.isEmpty == false
         hasModelTitle = decodedModelTitle ?? inferredFromEmoji
         isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+        folderID = try container.decodeIfPresent(UUID.self, forKey: .folderID)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -112,5 +118,6 @@ struct ChatSession: Identifiable, Codable, Hashable {
         try container.encode(isPersonalizationCollection, forKey: .isPersonalizationCollection)
         try container.encode(hasModelTitle, forKey: .hasModelTitle)
         try container.encode(isPinned, forKey: .isPinned)
+        try container.encodeIfPresent(folderID, forKey: .folderID)
     }
 }

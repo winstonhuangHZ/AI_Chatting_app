@@ -112,6 +112,24 @@ final class SessionStore: ObservableObject {
         sessions[index].isPinned.toggle()
     }
 
+    /// Moves a session into (or out of) a folder.
+    func move(_ session: ChatSession, to folderID: UUID?) {
+        guard let index = sessions.firstIndex(where: { $0.id == session.id }) else { return }
+        sessions[index].folderID = folderID
+    }
+
+    func move(sessionID: UUID, to folderID: UUID?) {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+        sessions[index].folderID = folderID
+    }
+
+    /// Clears folder membership after a folder is deleted.
+    func clearFolder(_ folderID: UUID) {
+        for index in sessions.indices where sessions[index].folderID == folderID {
+            sessions[index].folderID = nil
+        }
+    }
+
     /// Manual user-provided title/emoji (sidebar edit sheet). Marks the title
     /// as "chosen" so the model stops trying to rename it automatically.
     func applyManualMetadata(
@@ -267,6 +285,99 @@ final class SessionStore: ObservableObject {
         }
         sessions[sessionIndex].messages.removeSubrange(messageIndex...)
         sessions[sessionIndex].messages.insert(replacement, at: messageIndex)
+    }
+
+    // MARK: - Assistant answer versions (regenerate branches)
+
+    /// Prepares the last assistant message to receive a regenerated answer while
+    /// preserving the previous answer as version 1.
+    func prepareAssistantForRegeneration(
+        messageID: UUID,
+        model: String,
+        in sessionID: UUID
+    ) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let messageIndex = sessions[sessionIndex].messages.firstIndex(where: { $0.id == messageID }),
+              sessions[sessionIndex].messages[messageIndex].role == .assistant else {
+            return
+        }
+        var message = sessions[sessionIndex].messages[messageIndex]
+
+        if message.versions.isEmpty {
+            message.versions = [ChatMessageVersion(message: message)]
+        } else if message.activeVersionIndex >= 0,
+                  message.activeVersionIndex < message.versions.count {
+            message.versions[message.activeVersionIndex] = ChatMessageVersion(message: message)
+        }
+
+        message.content = ""
+        message.model = model
+        message.usage = nil
+        message.sources = []
+        message.toolFlow = []
+        message.reasoningContent = nil
+        sessions[sessionIndex].messages[messageIndex] = message
+    }
+
+    /// Commits the currently-streamed answer as a new version once it finished.
+    func finalizeAssistantVersion(
+        messageID: UUID,
+        in sessionID: UUID
+    ) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let messageIndex = sessions[sessionIndex].messages.firstIndex(where: { $0.id == messageID }),
+              sessions[sessionIndex].messages[messageIndex].role == .assistant else {
+            return
+        }
+        var message = sessions[sessionIndex].messages[messageIndex]
+        guard !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        message.versions.append(ChatMessageVersion(message: message))
+        message.activeVersionIndex = message.versions.count - 1
+        sessions[sessionIndex].messages[messageIndex] = message
+    }
+
+    /// Convenience for streaming paths that only know the originating session.
+    func finalizeLastAssistantVersion(in sessionID: UUID) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let messageID = sessions[sessionIndex].messages.last?.id else {
+            return
+        }
+        finalizeAssistantVersion(messageID: messageID, in: sessionID)
+    }
+
+    /// Switches the visible assistant answer version.
+    func selectAssistantVersion(
+        messageID: UUID,
+        index: Int,
+        in sessionID: UUID
+    ) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let messageIndex = sessions[sessionIndex].messages.firstIndex(where: { $0.id == messageID }),
+              index >= 0,
+              index < sessions[sessionIndex].messages[messageIndex].versions.count else {
+            return
+        }
+        let version = sessions[sessionIndex].messages[messageIndex].versions[index]
+        sessions[sessionIndex].messages[messageIndex].activeVersionIndex = index
+        sessions[sessionIndex].messages[messageIndex].content = version.content
+        sessions[sessionIndex].messages[messageIndex].timestamp = version.timestamp
+        sessions[sessionIndex].messages[messageIndex].model = version.model
+        sessions[sessionIndex].messages[messageIndex].usage = version.usage
+        sessions[sessionIndex].messages[messageIndex].sources = version.sources
+        sessions[sessionIndex].messages[messageIndex].toolFlow = version.toolFlow
+        sessions[sessionIndex].messages[messageIndex].reasoningContent = version.reasoningContent
+    }
+
+    /// Restores the currently selected version after a failed regeneration
+    /// (so cancelling/failing never leaves a blank bubble or loses the answer).
+    func restoreActiveAssistantVersion(messageID: UUID, in sessionID: UUID) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let messageIndex = sessions[sessionIndex].messages.firstIndex(where: { $0.id == messageID }) else {
+            return
+        }
+        let index = sessions[sessionIndex].messages[messageIndex].activeVersionIndex
+        selectAssistantVersion(messageID: messageID, index: index, in: sessionID)
     }
 
     // MARK: - Persistence

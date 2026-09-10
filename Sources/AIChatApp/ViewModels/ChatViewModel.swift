@@ -84,6 +84,9 @@ final class ChatViewModel: ObservableObject {
     /// `fetch_personalization_block` tool).
     let personalizationStore: PersonalizationStore
 
+    /// Sidebar folders (user-created or AI-classified).
+    let folderStore: FolderStore
+
     // MARK: - Published state
 
     /// All sessions (delegated to the shared store).
@@ -91,6 +94,9 @@ final class ChatViewModel: ObservableObject {
 
     /// All personalization blocks (mirrored from `personalizationStore` for the sidebar UI).
     @Published var personalizationBlocks: [PersonalizationBlock] = []
+
+    /// All sidebar folders (mirrored from `folderStore`).
+    @Published var folders: [ChatFolder] = []
 
     /// The selected session id (single source of truth; sidebar reads this).
     @Published var activeSessionID: UUID?
@@ -140,6 +146,9 @@ final class ChatViewModel: ObservableObject {
 
     /// Message id to scroll to + highlight after jumping from a search result.
     @Published var highlightMessageID: UUID?
+
+    /// Selected message text waiting to be inserted as a quote in the composer.
+    @Published var quotedText: String?
 
     /// Search hits computed off the main thread (Sidebar reads this).
     @Published private(set) var searchResults: [MessageSearchResult] = []
@@ -378,17 +387,20 @@ final class ChatViewModel: ObservableObject {
         configStore: ConfigStore,
         service: OpenAIService,
         userProfileStore: UserProfileStore = UserProfileStore(),
-        personalizationStore: PersonalizationStore = PersonalizationStore()
+        personalizationStore: PersonalizationStore = PersonalizationStore(),
+        folderStore: FolderStore = FolderStore()
     ) {
         self.sessionStore = sessionStore
         self.configStore = configStore
         self.service = service
         self.userProfileStore = userProfileStore
         self.personalizationStore = personalizationStore
+        self.folderStore = folderStore
 
         self.sessions = sessionStore.sessions
         self.activeSessionID = sessionStore.activeSessionID
         self.personalizationBlocks = personalizationStore.blocks
+        self.folders = folderStore.folders
 
         // 第一轮对话的 AI 通过 set_session_metadata 工具挑选会话 emoji/标题。
         // 全局 sink：工具在后台线程执行，跳回主线程后应用到当前活动会话。
@@ -407,6 +419,16 @@ final class ChatViewModel: ObservableObject {
         }
         ChatTools.personalizationNames = { [weak self] in
             self?.personalizationStore.names() ?? []
+        }
+
+        ChatTools.folderNames = { [weak self] in
+            self?.folderStore.names() ?? []
+        }
+        ChatTools.folderAssigner = { [weak self] sessionID, name in
+            guard let self,
+                  let folder = self.folderStore.folder(named: name),
+                  let targetSessionID = sessionID ?? self.activeSessionID else { return }
+            self.sessionStore.move(sessionID: targetSessionID, to: folder.id)
         }
 
         // Mirror store changes into this VM (one-way: store → VM).
@@ -430,9 +452,36 @@ final class ChatViewModel: ObservableObject {
             self?.personalizationBlocks = newBlocks
         }
         .store(in: &cancellables)
+
+        folderStore.$folders.sink { [weak self] newFolders in
+            self?.folders = newFolders
+        }
+        .store(in: &cancellables)
     }
 
     // MARK: - Session management
+
+    /// Sessions belonging to a folder (nil = uncategorized), in display order.
+    func sessions(in folderID: UUID?) -> [ChatSession] {
+        sidebarSessions.filter { $0.folderID == folderID }
+    }
+
+    func createFolder(named name: String) {
+        _ = folderStore.folder(named: name)
+    }
+
+    func renameFolder(_ folder: ChatFolder, to name: String) {
+        folderStore.rename(folder, to: name)
+    }
+
+    func deleteFolder(_ folder: ChatFolder) {
+        sessionStore.clearFolder(folder.id)
+        folderStore.delete(folder)
+    }
+
+    func moveSession(_ session: ChatSession, to folderID: UUID?) {
+        sessionStore.move(session, to: folderID)
+    }
 
     /// Pins/unpins a conversation from the sidebar.
     func togglePinSession(_ session: ChatSession) {
@@ -557,6 +606,19 @@ final class ChatViewModel: ObservableObject {
         NSPasteboard.general.setString(content, forType: .string)
     }
 
+    /// Queues selected message text for the composer's "quote and ask" flow.
+    func quoteSelection(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        quotedText = trimmed
+    }
+
+    /// Returns and clears the pending quote.
+    func takeQuotedText() -> String? {
+        defer { quotedText = nil }
+        return quotedText
+    }
+
     /// Deletes a single message from the active session.
     func deleteMessage(_ message: ChatMessage) {
         guard let sessionID = activeSessionID else { return }
@@ -634,23 +696,27 @@ final class ChatViewModel: ObservableObject {
             cancelStreaming()
         }
 
-        // 删除这条 assistant 回复。
-        sessionStore.deleteMessage(message, in: sessionID)
         clearError()
 
-        // 重试=删除+重发：历史字节前缀从删除点重置 → 显式提示。
+        // Retry changes the history prefix from the regenerated answer onward.
         cacheResetNotice = CacheResetNotice(reason: .historyEdited)
-
-        // 若共享 profile 自上次请求后变化，缓存前缀将重置 —— 先记录以便提示。
         trackProfileChange()
 
-        // 构建历史：删除后的会话全部消息（应以上一条 user 消息结尾）+
-        // system prompt。使用 `activeSession`（VM 单一数据源）。
-        //
-        // 缓存优化：静态 system prompt 在最前，动态上下文（时间+偏好）
-        // 作为最后一条 system 消息，保持前缀字节不变以提高中继缓存命中。
+        // Only the last assistant message can be regenerated in place as a
+        // branch; older answers keep the legacy delete-and-append behavior.
+        let canBranch = activeSession?.messages.last?.id == message.id
+        if !canBranch {
+            sessionStore.deleteMessage(message, in: sessionID)
+        }
+
+        // History: everything before this assistant answer (the assistant row is
+        // excluded either because it was deleted, or because startGeneration
+        // will reuse it as a versioned placeholder).
         var history = activeSession?.messages
-            .filter { !$0.content.isEmpty || !$0.attachments.isEmpty } ?? []
+            .filter {
+                $0.id != message.id
+                    && (!$0.content.isEmpty || !$0.attachments.isEmpty || !$0.documentAttachments.isEmpty)
+            } ?? []
 
         let systemPrompt = buildSystemPrompt(for: config, personalizationCollection: activeSession?.isPersonalizationCollection == true)
         history.insert(.system(systemPrompt), at: 0)
@@ -667,7 +733,18 @@ final class ChatViewModel: ObservableObject {
             sessionID: sessionID,
             config: config,
             model: config.selectedModel,
-            history: history
+            history: history,
+            reusingAssistantID: canBranch ? message.id : nil
+        )
+    }
+
+    /// Switches which regenerated answer version is shown in the bubble.
+    func selectAssistantVersion(_ message: ChatMessage, index: Int) {
+        guard let sessionID = activeSessionID else { return }
+        sessionStore.selectAssistantVersion(
+            messageID: message.id,
+            index: index,
+            in: sessionID
         )
     }
 
@@ -759,7 +836,8 @@ final class ChatViewModel: ObservableObject {
         sessionID: UUID,
         config: APIServerConfig,
         model: String,
-        history: [ChatMessage]
+        history: [ChatMessage],
+        reusingAssistantID: UUID? = nil
     ) {
         streamGeneration += 1
         let generation = streamGeneration
@@ -768,13 +846,25 @@ final class ChatViewModel: ObservableObject {
         // (the main cause of UI stutter); we'll force one save at the end.
         sessionStore.persistPaused = true
 
-        // Append a placeholder assistant message that fills as deltas land.
-        // Record the model so the message-info popover can show it.
-        var assistantMessage = ChatMessage.assistant()
-        assistantMessage.model = model
-        sessionStore.appendMessage(assistantMessage, to: sessionID)
-        streamingAssistantID = assistantMessage.id
-        let assistantMessageID = assistantMessage.id
+        let assistantMessageID: UUID
+        if let reusingAssistantID {
+            // Regenerate branch: reuse the existing assistant bubble, preserving
+            // the previous answer as a version instead of appending a new row.
+            sessionStore.prepareAssistantForRegeneration(
+                messageID: reusingAssistantID,
+                model: model,
+                in: sessionID
+            )
+            assistantMessageID = reusingAssistantID
+        } else {
+            // Append a placeholder assistant message that fills as deltas land.
+            // Record the model so the message-info popover can show it.
+            var assistantMessage = ChatMessage.assistant()
+            assistantMessage.model = model
+            sessionStore.appendMessage(assistantMessage, to: sessionID)
+            assistantMessageID = assistantMessage.id
+        }
+        streamingAssistantID = assistantMessageID
 
         isStreaming = true
         currentToolActivity = nil
@@ -809,11 +899,14 @@ final class ChatViewModel: ObservableObject {
                         ? ChatTools.set(
                             latexEnabled: configForRequest.latexEnabled,
                             includeSessionMetadata: titleStillNeedsModel,
-                            includeKnowledge: !personalizationBlocks.isEmpty
+                            includeKnowledge: !personalizationBlocks.isEmpty,
+                            includeFolders: true
                         )
                         : (titleStillNeedsModel
-                            ? [ChatTools.getTime, ChatTools.setSessionMetadata]
-                            : [ChatTools.getTime])
+                            ? [ChatTools.getTime, ChatTools.setSessionMetadata,
+                               ChatTools.listSessionFolders, ChatTools.assignSessionFolder]
+                            : [ChatTools.getTime,
+                               ChatTools.listSessionFolders, ChatTools.assignSessionFolder])
                     let stream = try await service.streamChatWithTools(
                         config: configForRequest,
                         model: modelForRequest,
@@ -882,6 +975,7 @@ final class ChatViewModel: ObservableObject {
                     }
 
                     self.persistLastUsage(to: sessionID)
+                    self.sessionStore.finalizeLastAssistantVersion(in: sessionID)
                     self.sessionStore.forcePersist()
                     self.isStreaming = false
                     self.streamTask = nil
@@ -950,6 +1044,7 @@ final class ChatViewModel: ObservableObject {
                 }
 
                 self.persistLastUsage(to: sessionID)
+                self.sessionStore.finalizeLastAssistantVersion(in: sessionID)
 
                 // Stream finished normally.
                 self.sessionStore.forcePersist()
@@ -962,6 +1057,16 @@ final class ChatViewModel: ObservableObject {
                 guard self.streamGeneration == generation else { return }
                 // User cancelled — keep any partial content.
                 self.sessionStore.forcePersist()
+                if let reusingAssistantID,
+                   let current = self.sessions.first(where: { $0.id == sessionID })?
+                    .messages.first(where: { $0.id == reusingAssistantID }),
+                   current.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   !current.versions.isEmpty {
+                    self.sessionStore.restoreActiveAssistantVersion(
+                        messageID: reusingAssistantID,
+                        in: sessionID
+                    )
+                }
                 self.isStreaming = false
                 self.streamTask = nil
                 self.streamingAssistantID = nil
@@ -980,10 +1085,16 @@ final class ChatViewModel: ObservableObject {
                 // Remove the placeholder assistant message if nothing arrived.
                 let partial = self.sessions.first(where: { $0.id == sessionID })?
                     .messages.first(where: { $0.id == assistantMessageID })
-                if partial?.content.isEmpty == true,
-                   self.sessions.first(where: { $0.id == sessionID })?.messages.last?.id
-                        == assistantMessageID {
-                    self.sessionStore.removeLastAssistantMessage(in: sessionID)
+                if partial?.content.isEmpty == true {
+                    if let partial, !partial.versions.isEmpty {
+                        self.sessionStore.restoreActiveAssistantVersion(
+                            messageID: assistantMessageID,
+                            in: sessionID
+                        )
+                    } else if self.sessions.first(where: { $0.id == sessionID })?.messages.last?.id
+                                == assistantMessageID {
+                        self.sessionStore.removeLastAssistantMessage(in: sessionID)
+                    }
                 }
 
                 self.errorMessage = error.localizedDescription
@@ -1069,6 +1180,7 @@ final class ChatViewModel: ObservableObject {
             sessionStore.updateLastAssistantToolFlow(toolFlow, in: sessionID)
         }
         persistLastUsage(to: sessionID)
+        sessionStore.finalizeLastAssistantVersion(in: sessionID)
 
         // After the full reply arrives, parse & store any new personalization.
         if let changes = UserProfileStore.parse(from: accumulated) {

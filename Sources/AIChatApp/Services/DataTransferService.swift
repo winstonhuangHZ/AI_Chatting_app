@@ -50,6 +50,9 @@ struct BackupBundle: Codable {
     /// 用户画像偏好。
     var userPreferences: [UserPreference]
 
+    /// 侧栏文件夹（可选，兼容旧备份）。
+    var folders: [ChatFolder]? = nil
+
     /// 账户页显示名（可选，兼容旧备份）。
     var displayName: String? = nil
 
@@ -98,6 +101,7 @@ enum DataTransferService {
         sessions: [ChatSession],
         profiles: [APIServerConfig],
         preferences: [UserPreference],
+        folders: [ChatFolder]? = nil,
         appearance: BackupAppearance,
         language: String?,
         displayName: String? = nil,
@@ -110,6 +114,7 @@ enum DataTransferService {
                     sessions: sessions,
                     profiles: profiles,
                     preferences: preferences,
+                    folders: folders,
                     appearance: appearance,
                     language: language,
                     displayName: displayName,
@@ -122,6 +127,7 @@ enum DataTransferService {
                     sessions: sessions,
                     profiles: profiles,
                     preferences: preferences,
+                    folders: folders,
                     appearance: appearance,
                     language: language,
                     displayName: displayName,
@@ -139,6 +145,7 @@ enum DataTransferService {
         sessions: [ChatSession],
         profiles: [APIServerConfig],
         preferences: [UserPreference],
+        folders: [ChatFolder]? = nil,
         appearance: BackupAppearance,
         language: String?,
         displayName: String? = nil,
@@ -152,6 +159,7 @@ enum DataTransferService {
             chatSessions: sessions,
             apiProfiles: sanitizedProfiles,
             userPreferences: preferences,
+            folders: folders,
             displayName: displayName,
             avatarData: avatarData,
             appearance: appearance,
@@ -212,6 +220,7 @@ enum DataTransferService {
         sessions: [ChatSession],
         profiles: [APIServerConfig],
         preferences: [UserPreference],
+        folders: [ChatFolder]? = nil,
         appearance: BackupAppearance,
         language: String?,
         displayName: String? = nil,
@@ -317,6 +326,7 @@ enum DataTransferService {
             chatSessions: sessions,
             apiProfiles: Self.sanitizedProfiles(profiles),
             userPreferences: preferences,
+            folders: folders,
             displayName: displayName,
             avatarData: avatarData,
             appearance: appearance,

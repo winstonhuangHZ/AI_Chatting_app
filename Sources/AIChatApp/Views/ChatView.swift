@@ -502,6 +502,39 @@ private struct MessageListViewportHeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
+/// macOS 15+ direct scroll-geometry observer: tells us the exact distance from
+/// the content bottom without relying on LazyVStack estimation or pinned ids.
+@available(macOS 15.0, *)
+private struct ScrollBottomObserver: ViewModifier {
+    @Binding var isAtBottom: Bool
+    let threshold: CGFloat
+
+    func body(content: Content) -> some View {
+        content.onScrollGeometryChange(for: Bool.self) { geometry in
+            let distance = geometry.contentSize.height
+                + geometry.contentInsets.bottom
+                - geometry.contentOffset.y
+                - geometry.containerSize.height
+            return distance <= threshold
+        } action: { _, newValue in
+            if isAtBottom != newValue {
+                isAtBottom = newValue
+            }
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func observeScrollBottom(_ isAtBottom: Binding<Bool>, threshold: CGFloat) -> some View {
+        if #available(macOS 15.0, *) {
+            modifier(ScrollBottomObserver(isAtBottom: isAtBottom, threshold: threshold))
+        } else {
+            self
+        }
+    }
+}
+
 /// Scrollable list of messages with smooth autocroll during streaming.
 private struct MessageList: View {
 
@@ -526,6 +559,9 @@ private struct MessageList: View {
     /// 聊天滚动视口高度。
     @State private var viewportHeight: CGFloat = 0
 
+    /// macOS 15+真实滚动几何结果：视口是否在底部 80pt 范围内。
+    @State private var scrollAtBottom = true
+
     /// Whether generation started while the user was already at the bottom.
     /// This is deliberately captured once per generation; streamed content
     /// must not repeatedly recalculate or take over the user's scroll position.
@@ -549,9 +585,27 @@ private struct MessageList: View {
     /// True when the bottom sentinel shows that the viewport sits at the
     /// bottom of the currently laid-out content.
     private var isNearBottom: Bool {
-        bottomEdgeY != .infinity
+        if #available(macOS 15.0, *) {
+            return scrollAtBottom
+        }
+        return bottomEdgeY != .infinity
             && viewportHeight > 0
             && bottomEdgeY <= viewportHeight + 16
+    }
+
+    /// Show the jump-to-latest pill only after the user has genuinely scrolled
+    /// away from the bottom (more than ~80 pt), and only while not pinned.
+    private var shouldShowJumpToLatest: Bool {
+        guard session.messages.last?.id != nil else {
+            return false
+        }
+        if #available(macOS 15.0, *) {
+            return !scrollAtBottom
+        }
+        return pinnedMessageID == nil
+            && bottomEdgeY != .infinity
+            && viewportHeight > 0
+            && bottomEdgeY > viewportHeight + 80
     }
 
     /// Smoothly scrolls back to the newest message and resumes bottom-following.
@@ -618,14 +672,10 @@ private struct MessageList: View {
                 }
             }
             .coordinateSpace(name: "chatScroll")
-            // 滚动正确性交给 .defaultScrollAnchor(.bottom)：
-            //   - 首次/切会话 → 初始落在底部
-            //   - 流式长高 → 视口跟随真实内容底部
-            //   - 用户上翻阅读 → 尊重阅读位置，绝不拽回底部
-            .defaultScrollAnchor(.bottom)
-            // 显式钉住最新消息：defaultScrollAnchor 只在首次布局/内容稳定时
-            // 生效，LazyVStack 的真实高度延后补齐时不会自动把视口追到新底部。
+            // 显式钉住最新消息；是否允许钉住由真实滚动几何控制，用户离开
+            // 底部时会立即释放，避免窗口 resize 时被重新锚回底部。
             .scrollPosition(id: $pinnedMessageID, anchor: .bottom)
+            .observeScrollBottom($scrollAtBottom, threshold: 80)
             .overlay(alignment: .bottom) {
                 GeometryReader { geo in
                     Color.clear.preference(
@@ -637,8 +687,7 @@ private struct MessageList: View {
             // 主流聊天客户端的“回到底部”按钮：只有用户上翻离开最新消息时出现，
             // 点击后平滑滑回最新回复，不会打断正在流式输出的内容。
             .overlay(alignment: .bottomTrailing) {
-                if pinnedMessageID == nil,
-                   session.messages.last?.id != nil {
+                if shouldShowJumpToLatest {
                     Button {
                         jumpToLatest()
                     } label: {
@@ -660,11 +709,22 @@ private struct MessageList: View {
                        value: pinnedMessageID)
             .onPreferenceChange(MessageListBottomEdgeKey.self) { bottomEdgeY = $0 }
             .onPreferenceChange(MessageListViewportHeightKey.self) { viewportHeight = $0 }
+            .onChange(of: scrollAtBottom) { _, atBottom in
+                // Release the anchor as soon as the user scrolls away. Keeping a
+                // stale pinned id makes window resizes re-anchor to the bottom
+                // and yank a reader who was browsing older messages.
+                if !atBottom {
+                    pinnedMessageID = nil
+                }
+            }
             .onAppear {
                 // Initial conversation: land on the newest message. A following
                 // session switch goes through the session.id handler below.
                 if pinnedMessageID == nil {
-                    pinnedMessageID = session.messages.last?.id
+                    let lastID = session.messages.last?.id
+                    DispatchQueue.main.async {
+                        pinnedMessageID = lastID
+                    }
                 }
             }
             .onChange(of: session.id) { _, _ in
@@ -802,6 +862,13 @@ private struct MessageBubble: View {
     @State private var isEditing = false
     @State private var editDraft = ""
 
+    /// `true` while the pointer is over this message row; shows hover actions.
+    @State private var isHovering = false
+
+    /// Short-lived "copied" feedback shown on the copy button.
+    @State private var justCopied = false
+    @State private var copyResetTask: Task<Void, Never>?
+
     // MARK: - Environment
 
     @EnvironmentObject private var appearance: AppearanceStore
@@ -837,21 +904,12 @@ private struct MessageBubble: View {
         .background(isHighlighted ? appearance.accentColor.opacity(0.18) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .animation(.easeInOut(duration: 0.25), value: isHighlighted)
-        .contextMenu {
-            Button {
-                chatViewModel.copyMessage(message)
-            } label: {
-                Label(L("msg.copy"), systemImage: "doc.on.doc")
-            }
-            .disabled(message.content.isEmpty)
-
-            Divider()
-
-            Button(role: .destructive) {
-                chatViewModel.deleteMessage(message)
-            } label: {
-                Label(L("msg.delete"), systemImage: "trash")
-            }
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .onDisappear {
+            copyResetTask?.cancel()
         }
     }
 
@@ -859,41 +917,45 @@ private struct MessageBubble: View {
     private var messageColumn: some View {
             VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(roleLabel).font(.caption).foregroundStyle(.secondary)
-                    // Per-message send/receive time: persisted with the message
-                    // (JSON `timestamp`) but never sent to the API, so prompt
-                    // caching is unaffected.
-                    Text(message.timestamp.formatted(date: .numeric, time: .shortened))
-                        .font(.caption2).foregroundStyle(.tertiary)
-                        .help(message.timestamp.formatted(date: .complete, time: .standard))
+                    if message.role == .user {
+                        Spacer(minLength: 0)
 
-                    if message.role == .assistant && !isStreaming {
-                        Button {
-                            showDetail.toggle()
-                        } label: {
-                            Image(systemName: "info.circle")
-                                .font(.system(size: 10))
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.tertiary)
-                        .help(L("detail.help"))
-                        .popover(isPresented: $showDetail) {
-                            MessageDetailView(message: message)
-                        }
-                    }
+                        Text(roleLabel).font(.caption).foregroundStyle(.secondary)
+                        Text(message.timestamp.formatted(date: .numeric, time: .shortened))
+                            .font(.caption2).foregroundStyle(.tertiary)
+                            .help(message.timestamp.formatted(date: .complete, time: .standard))
 
-                    // User messages: pencil opens inline edit + resend.
-                    if message.role == .user && !isStreaming {
-                        Button {
-                            editDraft = message.content
-                            isEditing = true
-                        } label: {
-                            Image(systemName: "pencil")
-                                .font(.system(size: 10))
+                        // User actions stay on the user (right) side.
+                        hoverActionArea
+                    } else {
+                        Text(roleLabel).font(.caption).foregroundStyle(.secondary)
+                        Text(message.timestamp.formatted(date: .numeric, time: .shortened))
+                            .font(.caption2).foregroundStyle(.tertiary)
+                            .help(message.timestamp.formatted(date: .complete, time: .standard))
+
+                        if !isStreaming {
+                            Button {
+                                showDetail.toggle()
+                            } label: {
+                                Image(systemName: "info.circle")
+                                    .font(.system(size: 10))
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.tertiary)
+                            .help(L("detail.help"))
+                            .popover(isPresented: $showDetail) {
+                                MessageDetailView(message: message)
+                            }
                         }
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.tertiary)
-                        .help(L("msg.edit"))
+
+                        if !isStreaming && message.versions.count > 1 {
+                            versionControl
+                        }
+
+                        // Assistant actions stay on the assistant (left) side.
+                        hoverActionArea
+
+                        Spacer(minLength: 0)
                     }
                 }
 
@@ -931,7 +993,11 @@ private struct MessageBubble: View {
                             .frame(maxWidth: 620, alignment: .leading)
                             .fixedSize(horizontal: false, vertical: true)
                     } else if message.role == .assistant {
-                        MarkdownText(text: message.content, fontSize: nil)
+                        MarkdownText(
+                            text: message.content,
+                            fontSize: nil,
+                            onQuote: { chatViewModel.quoteSelection($0) }
+                        )
                             // Inner: let the markdown breathe to the full row.
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 12)
@@ -973,10 +1039,6 @@ private struct MessageBubble: View {
                         .padding(.top, 2)
                 }
 
-                // Quick actions below AI messages: Retry / Copy / Delete.
-                if message.role == .assistant && !isStreaming {
-                    messageActionBar
-                }
             }
     }
 
@@ -1066,54 +1128,105 @@ private struct MessageBubble: View {
         return URL(string: string) ?? URL(string: "https://")!
     }
 
-    // MARK: - Quick action bar (below assistant messages)
+    // MARK: - Hover message actions
 
+    /// ChatGPT-style ‹ 2/3 › switcher for regenerated answers.
     @ViewBuilder
-    private var messageActionBar: some View {
-        HStack(spacing: 8) {
-            actionButton(
-                title: L("msg.retry"),
-                systemImage: "arrow.clockwise",
-                help: L("msg.retry")
-            ) {
-                chatViewModel.retryMessage(message)
+    private var versionControl: some View {
+        HStack(spacing: 2) {
+            Button {
+                chatViewModel.selectAssistantVersion(message, index: message.activeVersionIndex - 1)
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .disabled(message.activeVersionIndex <= 0)
+
+            Text("\(message.activeVersionIndex + 1)/\(message.versions.count)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            Button {
+                chatViewModel.selectAssistantVersion(message, index: message.activeVersionIndex + 1)
+            } label: {
+                Image(systemName: "chevron.right")
+            }
+            .disabled(message.activeVersionIndex >= message.versions.count - 1)
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 9, weight: .semibold))
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
+        .background(Color.secondary.opacity(0.08), in: Capsule())
+    }
+
+    /// Always occupies the same fixed header space; icons fade in on hover so
+    /// neither the row width nor the row height jumps when they appear.
+    @ViewBuilder
+    private var hoverActionArea: some View {
+        HStack(spacing: 2) {
+            if message.role == .user {
+                iconButton("pencil", L("msg.edit")) {
+                    editDraft = message.content
+                    isEditing = true
+                }
+            } else {
+                iconButton("arrow.clockwise", L("msg.retry")) {
+                    chatViewModel.retryMessage(message)
+                }
+                .disabled(isStreaming)
             }
 
-            actionButton(
-                title: L("msg.copy"),
-                systemImage: "doc.on.doc",
-                help: L("msg.copy")
-            ) {
-                chatViewModel.copyMessage(message)
+            Button {
+                copyWithFeedback()
+            } label: {
+                Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 10, weight: .medium))
+                    .frame(width: 20, height: 14)
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(justCopied ? Color.green : Color.secondary)
+            .help(L(justCopied ? "msg.copied" : "msg.copy"))
             .disabled(message.content.isEmpty)
 
-            actionButton(
-                title: L("msg.delete"),
-                systemImage: "trash",
-                help: L("msg.delete")
-            ) {
+            iconButton("trash", L("msg.delete")) {
                 chatViewModel.deleteMessage(message)
             }
         }
-        .padding(.leading, 4)
-        .padding(.top, 2)
+        .opacity(isHovering && !isEditing ? 1 : 0)
+        .disabled(!isHovering || isEditing)
     }
 
-    private func actionButton(
-        title: String,
-        systemImage: String,
-        help: String,
+    private func iconButton(
+        _ systemImage: String,
+        _ help: String,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(appearance.fontPreset.font(size: 10))
-                .labelStyle(.titleAndIcon)
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .medium))
+                .frame(width: 20, height: 14)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .help(help)
+    }
+
+    /// Copies the message and shows a short green checkmark on the button.
+    private func copyWithFeedback() {
+        chatViewModel.copyMessage(message)
+        guard !message.content.isEmpty else { return }
+
+        copyResetTask?.cancel()
+        withAnimation(.easeOut(duration: 0.12)) {
+            justCopied = true
+        }
+        copyResetTask = Task {
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: 0.2)) {
+                justCopied = false
+            }
+        }
     }
 
     // MARK: - Attachment grid
@@ -1480,6 +1593,15 @@ private struct UsageBarView: View {
         return price.isValid
     }
 
+    private var contextLimit: Int? {
+        ModelContextWindow.size(for: model)
+    }
+
+    private var contextRatio: Double {
+        guard let limit = contextLimit, limit > 0 else { return 0 }
+        return min(1, Double(displayInput) / Double(limit))
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             Text(L("usage.tokens",
@@ -1487,6 +1609,21 @@ private struct UsageBarView: View {
                    TokenUsage.formatCount(displayOutput)))
                 .font(.caption).foregroundStyle(.secondary)
                 .help(L(hasRealUsage ? "usage.tokens.real" : "usage.tokens.estimate"))
+
+            if let limit = contextLimit, limit > 0 {
+                HStack(spacing: 4) {
+                    ProgressView(value: contextRatio)
+                        .progressViewStyle(.linear)
+                        .frame(width: 64)
+                        .tint(contextRatio > 0.9 ? .red : (contextRatio > 0.7 ? .orange : .green))
+                    Text("\(Int((contextRatio * 100).rounded()))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(contextRatio > 0.9 ? Color.red : .secondary)
+                }
+                .help(L("usage.context",
+                        TokenUsage.formatCount(displayInput),
+                        TokenUsage.formatCount(limit)))
+            }
 
             if let estimate = costEstimate {
                 Text("≈ \(TokenUsage.formatCost(estimate.full))")
@@ -1561,6 +1698,7 @@ private struct InputBarView: View {
     let dropRouter: ChatDropRouter
 
     @EnvironmentObject private var appearance: AppearanceStore
+    @EnvironmentObject private var chatViewModel: ChatViewModel
 
     /// 界面本地化——语言切换时即时刷新。
     @EnvironmentObject private var localization: LocalizationManager
@@ -1658,6 +1796,19 @@ private struct InputBarView: View {
         .onDisappear {
             if dropRouter.onDrop != nil {
                 dropRouter.onDrop = nil
+            }
+        }
+        .onChange(of: chatViewModel.quotedText) { _, newValue in
+            guard newValue != nil,
+                  let quoted = chatViewModel.takeQuotedText() else { return }
+            let block = quoted
+                .components(separatedBy: .newlines)
+                .map { "> \($0)" }
+                .joined(separator: "\n")
+            if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                draft = block + "\n\n"
+            } else {
+                draft += "\n\n" + block + "\n\n"
             }
         }
     }

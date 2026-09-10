@@ -12,6 +12,7 @@ struct BackupRestoreView: View {
     @EnvironmentObject private var userProfileStore: UserProfileStore
     @EnvironmentObject private var appearance: AppearanceStore
     @EnvironmentObject private var localization: LocalizationManager
+    @EnvironmentObject private var chatViewModel: ChatViewModel
 
     // MARK: - State
 
@@ -122,6 +123,7 @@ struct BackupRestoreView: View {
         let sessions = sessionStore.sessions
         let profiles = configStore.configs
         let preferences = userProfileStore.preferences
+        let folders = chatViewModel.folderStore.folders
         let backupAppearance = BackupAppearance(
             fontPreset: appearance.fontPreset.rawValue,
             fontSizeLevel: appearance.fontSizeLevel.rawValue,
@@ -140,6 +142,7 @@ struct BackupRestoreView: View {
                     sessions: sessions,
                     profiles: profiles,
                     preferences: preferences,
+                    folders: folders,
                     appearance: backupAppearance,
                     language: language,
                     displayName: displayName,
@@ -173,6 +176,9 @@ struct BackupRestoreView: View {
                 sessionStore.replaceAll(with: bundle.chatSessions)
                 configStore.replaceAll(with: bundle.apiProfiles)
                 userProfileStore.replaceAll(with: bundle.userPreferences)
+                if let folders = bundle.folders {
+                    chatViewModel.folderStore.replaceAll(with: folders)
+                }
 
                 if let backupAppearance = bundle.appearance {
                     appearance.apply(from: backupAppearance)
