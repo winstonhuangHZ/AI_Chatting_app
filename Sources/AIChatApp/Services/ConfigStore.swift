@@ -130,12 +130,14 @@ final class ConfigStore: ObservableObject {
     func updateModels(
         _ models: [String],
         prices: [String: ModelPrice],
+        contextWindows: [String: Int] = [:],
         normalizedBaseURL: URL,
         for configID: UUID
     ) {
         guard let index = configs.firstIndex(where: { $0.id == configID }) else { return }
         configs[index].availableModels = models
         configs[index].modelPrices = prices
+        configs[index].modelContextWindows = contextWindows
         configs[index].baseURL = normalizedBaseURL.absoluteString
     }
 

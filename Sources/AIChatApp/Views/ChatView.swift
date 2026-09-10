@@ -137,7 +137,13 @@ struct ChatView: View {
                 systemPrompt: configStore.activeConfig?.systemPrompt ?? "",
                 profileJSON: chatViewModel.userProfileStore.jsonPayload,
                 customPrice: configStore.activeConfig?.customPrice,
-                cacheUsage: chatViewModel.lastCacheUsage
+                cacheUsage: chatViewModel.lastCacheUsage,
+                contextLimit: {
+                    guard let config = configStore.activeConfig else { return nil }
+                    return config.contextWindowOverride
+                        ?? config.modelContextWindows[config.selectedModel]
+                        ?? ModelContextWindow.size(for: config.selectedModel)
+                }()
             )
 
             InputBarView(
@@ -1542,6 +1548,9 @@ private struct UsageBarView: View {
     /// Relay-reported cache hit/miss for the last completed request.
     let cacheUsage: StreamUsage?
 
+    /// Resolved context window (manual override → relay metadata → heuristic).
+    let contextLimit: Int?
+
     /// 界面本地化——语言切换时即时刷新。
     @EnvironmentObject private var localization: LocalizationManager
 
@@ -1591,10 +1600,6 @@ private struct UsageBarView: View {
     private var usingDynamicPrice: Bool {
         guard let price = dynamicPrices[model] else { return false }
         return price.isValid
-    }
-
-    private var contextLimit: Int? {
-        ModelContextWindow.size(for: model)
     }
 
     private var contextRatio: Double {

@@ -87,6 +87,12 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     /// Empty when the relay does not expose `pricing`.
     var modelPrices: [String: ModelPrice]
 
+    /// Context windows fetched from the relay's model metadata (keyed by model id).
+    var modelContextWindows: [String: Int]
+
+    /// Optional user override for the active model's context window.
+    var contextWindowOverride: Int?
+
     /// Editable system prompt. Sent as the first `system` message on every
     /// request. The default preset tells the model Markdown is rendered.
     var systemPrompt: String
@@ -167,6 +173,8 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         selectedModel: String = "",
         availableModels: [String] = [],
         modelPrices: [String: ModelPrice] = [:],
+        modelContextWindows: [String: Int] = [:],
+        contextWindowOverride: Int? = nil,
         systemPrompt: String = APIServerConfig.defaultSystemPrompt,
         streamEnabled: Bool = true,
         includeTimestamp: Bool = false,
@@ -181,6 +189,8 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         self.selectedModel = selectedModel
         self.availableModels = availableModels
         self.modelPrices = modelPrices
+        self.modelContextWindows = modelContextWindows
+        self.contextWindowOverride = contextWindowOverride
         self.systemPrompt = systemPrompt
         self.streamEnabled = streamEnabled
         self.includeTimestamp = includeTimestamp
@@ -209,6 +219,8 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         selectedModel = try container.decode(String.self, forKey: .selectedModel)
         availableModels = try container.decode([String].self, forKey: .availableModels)
         modelPrices = try container.decodeIfPresent([String: ModelPrice].self, forKey: .modelPrices) ?? [:]
+        modelContextWindows = try container.decodeIfPresent([String: Int].self, forKey: .modelContextWindows) ?? [:]
+        contextWindowOverride = try container.decodeIfPresent(Int.self, forKey: .contextWindowOverride)
         systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
             ?? APIServerConfig.defaultSystemPrompt
         streamEnabled = try container.decodeIfPresent(Bool.self, forKey: .streamEnabled) ?? true

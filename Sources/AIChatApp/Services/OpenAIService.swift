@@ -386,6 +386,25 @@ struct StreamUsage: Sendable, Equatable {
     }
 }
 
+/// Best-effort account balance reported by a relay.
+struct BalanceInfo: Sendable, Equatable {
+    var available: Double?
+    var total: Double?
+    var used: Double?
+    var currency: String?
+    var source: String
+
+    var display: String {
+        if let available {
+            return "\(source): \(String(format: "%.2f", available)) \(currency ?? "USD")"
+        }
+        if let total, let used {
+            return "\(source): \(String(format: "%.2f", total - used)) / \(String(format: "%.2f", total)) \(currency ?? "USD")"
+        }
+        return source
+    }
+}
+
 /// Events yielded by `streamChatWithTools` (function calling).
 enum ChatStreamEvent: Sendable {
     /// A text delta of the final answer.
@@ -438,7 +457,15 @@ actor OpenAIService {
                 let prompt: Double?
                 let completion: Double?
             }
+            struct TopProvider: Decodable {
+                let context_length: Int?
+                let max_completion_tokens: Int?
+            }
             let pricing: Pricing?
+            let context_length: Int?
+            let max_context_length: Int?
+            let context_window: Int?
+            let top_provider: TopProvider?
         }
         let data: [ModelItem]
     }
@@ -826,7 +853,7 @@ actor OpenAIService {
     /// - Returns: Sorted model ids and a dictionary of model-id → price.
     func fetchModels(
         config: APIServerConfig
-    ) async throws -> ([String], [String: ModelPrice]) {
+    ) async throws -> ([String], [String: ModelPrice], [String: Int]) {
         let baseURL = try normalizedBaseURL(from: config.baseURL)
         guard !config.apiKey.isEmpty else {
             throw OpenAIServiceError.missingAPIKey
@@ -863,14 +890,22 @@ actor OpenAIService {
             let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
             let models = Array(Set(decoded.data.map { $0.id })).sorted()
             var prices: [String: ModelPrice] = [:]
+            var contextWindows: [String: Int] = [:]
             for item in decoded.data {
+                let context = item.context_length
+                    ?? item.max_context_length
+                    ?? item.context_window
+                    ?? item.top_provider?.context_length
+                if let context, context > 0 {
+                    contextWindows[item.id] = context
+                }
                 guard let pricing = item.pricing,
                       let prompt = pricing.prompt,
                       let completion = pricing.completion,
                       prompt >= 0, completion >= 0 else { continue }
                 prices[item.id] = ModelPrice(prompt: prompt, completion: completion)
             }
-            return (models, prices)
+            return (models, prices, contextWindows)
         } catch {
             throw OpenAIServiceError.decodingFailed(
                 "Expected {\"data\":[{\"id\":\"model\"}]}. \(error.localizedDescription)"
@@ -1406,6 +1441,96 @@ actor OpenAIService {
     }
 
     // MARK: - Helpers
+
+    // MARK: - Account balance (best effort)
+
+    /// Tries the common relay billing endpoints. There is no standard in the
+    /// OpenAI API, so this is explicitly best-effort and returns a readable
+    /// error when the provider exposes nothing.
+    func fetchBalance(config: APIServerConfig) async throws -> BalanceInfo {
+        let base = try normalizedBaseURL(from: config.baseURL)
+        guard !config.apiKey.isEmpty else { throw OpenAIServiceError.missingAPIKey }
+
+        var candidates: [(String, String)] = []
+        if base.host?.contains("openrouter.ai") == true {
+            candidates.append(("OpenRouter", "https://openrouter.ai/api/v1/credits"))
+        }
+        var root = base.absoluteString
+        if root.hasSuffix("/v1") { root.removeLast(3) }
+        if root.hasSuffix("/") { root.removeLast() }
+        candidates.append(("Billing", root + "/dashboard/billing/credit_grants"))
+        candidates.append(("Billing", root + "/v1/dashboard/billing/credit_grants"))
+        candidates.append(("Relay", root + "/api/user/self"))
+
+        for (source, urlString) in candidates {
+            guard let url = URL(string: urlString) else { continue }
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 15
+            request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+            guard let (data, response) = try? await session.data(for: request),
+                  let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+            if let info = Self.parseBalance(object, source: source) {
+                return info
+            }
+        }
+        throw OpenAIServiceError.transport(
+            "This provider does not expose an account balance endpoint."
+        )
+    }
+
+    private static func parseBalance(_ object: [String: Any], source: String) -> BalanceInfo? {
+        func number(_ any: Any?) -> Double? {
+            if let d = any as? Double { return d }
+            if let i = any as? Int { return Double(i) }
+            if let n = any as? NSNumber { return n.doubleValue }
+            if let s = any as? String { return Double(s) }
+            return nil
+        }
+
+        // OpenRouter: {"data":{"total_credits":10,"total_usage":2.5}}
+        if let data = object["data"] as? [String: Any] {
+            let credits = number(data["total_credits"])
+            let usage = number(data["total_usage"])
+            if credits != nil || usage != nil {
+                return BalanceInfo(
+                    available: credits.map { $0 - (usage ?? 0) },
+                    total: credits,
+                    used: usage,
+                    currency: "USD",
+                    source: source
+                )
+            }
+            // new-api / one-api: quota units are USD * 500000.
+            if let quota = number(data["quota"]) {
+                return BalanceInfo(
+                    available: quota / 500_000,
+                    total: nil,
+                    used: number(data["used_quota"]).map { $0 / 500_000 },
+                    currency: "USD",
+                    source: source
+                )
+            }
+        }
+
+        // OpenAI legacy billing: total_available / total_granted / total_used.
+        if let available = number(object["total_available"]) {
+            return BalanceInfo(
+                available: available,
+                total: number(object["total_granted"]),
+                used: number(object["total_used"]),
+                currency: "USD",
+                source: source
+            )
+        }
+        return nil
+    }
 
     /// Extracts a human-readable message from a non-2xx JSON error body.
     private static func decodeErrorMessage(from data: Data) -> String {

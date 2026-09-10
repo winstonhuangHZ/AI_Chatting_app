@@ -246,7 +246,15 @@ private struct ProfileListView: View {
                             },
                             onTest: {
                                 Task { await appSettingViewModel.testConnection(for: config) }
-                            }
+                            },
+                            onBalance: {
+                                Task { await appSettingViewModel.fetchBalance(for: config) }
+                            },
+                            balanceText: configStore.activeConfigID == config.id
+                                ? appSettingViewModel.balanceText
+                                : nil,
+                            isFetchingBalance: appSettingViewModel.isFetchingBalance
+                                && configStore.activeConfigID == config.id
                         )
                     }
                     .frame(height: CGFloat(min(configStore.configs.count, 4)) * 100 + 16)
@@ -391,6 +399,9 @@ private struct ProfileRow: View {
     let onDelete: () -> Void
     let onFetchModels: () -> Void
     let onTest: () -> Void
+    let onBalance: () -> Void
+    let balanceText: String?
+    let isFetchingBalance: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -424,11 +435,21 @@ private struct ProfileRow: View {
                        action: onFetchModels)
                     .buttonStyle(.bordered)
                 Button(L("test"), action: onTest).buttonStyle(.bordered)
+                Button(L("balance"), action: onBalance).buttonStyle(.bordered)
+                    .disabled(isFetchingBalance)
                 Button(L("edit"), action: onEdit).buttonStyle(.bordered)
                 Spacer()
                 Button(L("delete"), role: .destructive, action: onDelete).buttonStyle(.bordered)
             }
             .font(.callout)
+
+            if let balanceText {
+                Text(balanceText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if isFetchingBalance {
+                ProgressView().controlSize(.small)
+            }
         }
         .padding(.vertical, 6)
     }
@@ -515,6 +536,15 @@ private struct ProfileEditView: View {
         )
     }
 
+    private var contextWindowBinding: Binding<Int> {
+        Binding(
+            get: { draft.contextWindowOverride ?? 0 },
+            set: { value in
+                draft.contextWindowOverride = value > 0 ? value : nil
+            }
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(isNew ? L("add.profile.title") : L("edit.profile.title")).font(.title2.bold())
@@ -543,6 +573,19 @@ private struct ProfileEditView: View {
                     Text(L("generation"))
                 } footer: {
                     Text(L("generation.footer"))
+                }
+
+                Section {
+                    TextField(
+                        L("context.window"),
+                        value: contextWindowBinding,
+                        format: .number
+                    )
+                    .help(L("context.window.help"))
+                } header: {
+                    Text(L("context.section"))
+                } footer: {
+                    Text(L("context.window.footer"))
                 }
 
                 Section {

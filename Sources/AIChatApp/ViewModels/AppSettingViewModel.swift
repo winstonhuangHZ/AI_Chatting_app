@@ -29,6 +29,10 @@ final class AppSettingViewModel: ObservableObject {
     /// `true` while a connection test is in flight.
     @Published var isTestingConnection = false
 
+    /// Best-effort account balance text for the active profile.
+    @Published var balanceText: String?
+    @Published var isFetchingBalance = false
+
     /// Last user-facing status message (success or failure).
     @Published var statusMessage: String?
 
@@ -104,7 +108,7 @@ final class AppSettingViewModel: ObservableObject {
         defer { isTestingConnection = false }
 
         do {
-            let (models, _) = try await service.fetchModels(config: config)
+            let (models, _, _) = try await service.fetchModels(config: config)
             statusMessage = "✓ Connected — \(models.count) model(s) available."
             statusIsError = false
         } catch {
@@ -128,7 +132,7 @@ final class AppSettingViewModel: ObservableObject {
         defer { isLoadingModels = false }
 
         do {
-            let (models, prices) = try await service.fetchModels(config: config)
+            let (models, prices, contextWindows) = try await service.fetchModels(config: config)
 
             // Normalize the base URL and persist models + dynamic prices.
             // `normalizedBaseURL` is an actor method — must `await`.
@@ -141,6 +145,7 @@ final class AppSettingViewModel: ObservableObject {
             configStore.updateModels(
                 models,
                 prices: prices,
+                contextWindows: contextWindows,
                 normalizedBaseURL: normalized,
                 for: configID
             )
@@ -160,6 +165,19 @@ final class AppSettingViewModel: ObservableObject {
         } catch {
             statusMessage = error.localizedDescription
             statusIsError = true
+        }
+    }
+
+    /// Best-effort balance lookup (OpenRouter / legacy OpenAI billing /
+    /// new-api-style relays). Most providers do not expose this.
+    func fetchBalance(for config: APIServerConfig) async {
+        isFetchingBalance = true
+        defer { isFetchingBalance = false }
+        do {
+            let info = try await service.fetchBalance(config: config)
+            balanceText = info.display
+        } catch {
+            balanceText = "Balance unavailable — \(error.localizedDescription)"
         }
     }
 
