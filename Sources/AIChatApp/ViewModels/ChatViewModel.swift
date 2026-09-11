@@ -904,6 +904,11 @@ final class ChatViewModel: ObservableObject {
         let visionOverride: Bool? = forceVision
             ? true
             : configForRequest.modelVisionOverrides[modelForRequest]
+        ChatTools.setSearchConfiguration(.init(
+            provider: configForRequest.searchProvider,
+            apiKey: configForRequest.searchAPIKey,
+            endpoint: configForRequest.searchEndpoint
+        ))
 
         streamTask = Task { [weak self] in
             guard let self else { return }

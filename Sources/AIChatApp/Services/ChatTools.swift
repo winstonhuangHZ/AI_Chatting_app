@@ -41,6 +41,30 @@ struct BuiltinTool {
 /// Registry + execution for the built-in tools offered to the model.
 enum ChatTools {
 
+    /// Search backend configuration for the currently running request.
+    /// Written by ChatViewModel before a request starts and read by the
+    /// `web_search` tool (which runs inside the service's tool loop).
+    struct WebSearchConfiguration: Sendable {
+        var provider: SearchProvider = .automatic
+        var apiKey: String = ""
+        var endpoint: String = ""
+    }
+
+    private static let searchConfigLock = NSLock()
+    private static var _searchConfiguration = WebSearchConfiguration()
+
+    static func setSearchConfiguration(_ configuration: WebSearchConfiguration) {
+        searchConfigLock.lock()
+        _searchConfiguration = configuration
+        searchConfigLock.unlock()
+    }
+
+    static var searchConfiguration: WebSearchConfiguration {
+        searchConfigLock.lock()
+        defer { searchConfigLock.unlock() }
+        return _searchConfiguration
+    }
+
     /// 由 ChatViewModel 注入的处理函数：应用 AI 在第一轮对话为会话挑选的
     /// emoji 和标题。工具在后台线程执行，通过 `MainActor.run` 跳回主线程调用。
     @MainActor static var sessionMetadataSink: ((UUID?, String, String) -> Void)?
@@ -494,6 +518,14 @@ enum ChatTools {
 enum WebSearch {
 
     static func search(_ query: String, maxResults: Int = 5) async throws -> String {
+        let configuration = ChatTools.searchConfiguration
+        if let result = try await providerSearch(
+            query,
+            maxResults: maxResults,
+            configuration: configuration
+        ) {
+            return result
+        }
         if let result = try? await instantAnswer(query), !result.isEmpty {
             return result
         }
@@ -501,6 +533,166 @@ enum WebSearch {
             return result
         }
         return try await htmlSearch(query, maxResults: maxResults)
+    }
+
+    // MARK: Configured API providers
+
+    private static func providerSearch(
+        _ query: String,
+        maxResults: Int,
+        configuration: ChatTools.WebSearchConfiguration
+    ) async throws -> String? {
+        switch configuration.provider {
+        case .automatic:
+            if !configuration.apiKey.isEmpty {
+                if let result = try? await tavily(query, key: configuration.apiKey, maxResults: maxResults),
+                   !result.hasPrefix("Error:") {
+                    return result
+                }
+                if let result = try? await brave(query, key: configuration.apiKey, maxResults: maxResults),
+                   !result.hasPrefix("Error:") {
+                    return result
+                }
+                if let result = try? await serper(query, key: configuration.apiKey, maxResults: maxResults),
+                   !result.hasPrefix("Error:") {
+                    return result
+                }
+            }
+            if !configuration.endpoint.isEmpty,
+               let result = try? await searxng(query, endpoint: configuration.endpoint, maxResults: maxResults),
+               !result.hasPrefix("Error:") {
+                return result
+            }
+            return nil
+        case .brave:
+            guard !configuration.apiKey.isEmpty else {
+                return "Error: Brave Search selected, but no search API key is configured."
+            }
+            return try await brave(query, key: configuration.apiKey, maxResults: maxResults)
+        case .serper:
+            guard !configuration.apiKey.isEmpty else {
+                return "Error: Serper selected, but no search API key is configured."
+            }
+            return try await serper(query, key: configuration.apiKey, maxResults: maxResults)
+        case .tavily:
+            guard !configuration.apiKey.isEmpty else {
+                return "Error: Tavily selected, but no search API key is configured."
+            }
+            return try await tavily(query, key: configuration.apiKey, maxResults: maxResults)
+        case .searxng:
+            guard !configuration.endpoint.isEmpty else {
+                return "Error: SearXNG selected, but no endpoint URL is configured."
+            }
+            return try await searxng(query, endpoint: configuration.endpoint, maxResults: maxResults)
+        }
+    }
+
+    private static func format(_ query: String, _ results: [ResultItem]) -> String {
+        guard !results.isEmpty else { return "" }
+        var output = "Web search results for \"\(query)\":\n"
+        for (index, result) in results.enumerated() {
+            output += "\(index + 1). \(result.title)\n   \(result.snippet)\n   \(result.url)\n"
+        }
+        return output
+    }
+
+    private static func brave(_ query: String, key: String, maxResults: Int) async throws -> String {
+        var components = URLComponents(string: "https://api.search.brave.com/res/v1/web/search")!
+        components.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "count", value: "\(maxResults)"),
+        ]
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 20
+        request.setValue(key, forHTTPHeaderField: "X-Subscription-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let web = object["web"] as? [String: Any],
+              let items = web["results"] as? [[String: Any]] else {
+            return "Error: Brave Search request failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1))."
+        }
+        let results = items.prefix(maxResults).compactMap { item -> ResultItem? in
+            guard let title = item["title"] as? String,
+                  let url = item["url"] as? String else { return nil }
+            return ResultItem(title: title, snippet: (item["description"] as? String) ?? "", url: url)
+        }
+        return format(query, results)
+    }
+
+    private static func serper(_ query: String, key: String, maxResults: Int) async throws -> String {
+        var request = URLRequest(url: URL(string: "https://google.serper.dev/search")!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 20
+        request.setValue(key, forHTTPHeaderField: "X-API-KEY")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "q": query,
+            "num": maxResults,
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = object["organic"] as? [[String: Any]] else {
+            return "Error: Serper request failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1))."
+        }
+        let results = items.prefix(maxResults).compactMap { item -> ResultItem? in
+            guard let title = item["title"] as? String,
+                  let url = item["link"] as? String else { return nil }
+            return ResultItem(title: title, snippet: (item["snippet"] as? String) ?? "", url: url)
+        }
+        return format(query, results)
+    }
+
+    private static func tavily(_ query: String, key: String, maxResults: Int) async throws -> String {
+        var request = URLRequest(url: URL(string: "https://api.tavily.com/search")!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 20
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "api_key": key,
+            "query": query,
+            "max_results": maxResults,
+            "search_depth": "basic",
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = object["results"] as? [[String: Any]] else {
+            return "Error: Tavily request failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1))."
+        }
+        let results = items.prefix(maxResults).compactMap { item -> ResultItem? in
+            guard let title = item["title"] as? String,
+                  let url = item["url"] as? String else { return nil }
+            return ResultItem(title: title, snippet: (item["content"] as? String) ?? "", url: url)
+        }
+        return format(query, results)
+    }
+
+    private static func searxng(_ query: String, endpoint: String, maxResults: Int) async throws -> String {
+        var trimmed = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        while trimmed.hasSuffix("/") { trimmed.removeLast() }
+        var components = URLComponents(string: trimmed + "/search")!
+        components.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "format", value: "json"),
+        ]
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 20
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = object["results"] as? [[String: Any]] else {
+            return "Error: SearXNG request failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1))."
+        }
+        let results = items.prefix(maxResults).compactMap { item -> ResultItem? in
+            guard let title = item["title"] as? String,
+                  let url = item["url"] as? String else { return nil }
+            return ResultItem(title: title, snippet: (item["content"] as? String) ?? "", url: url)
+        }
+        return format(query, results)
     }
 
     /// Parses the `1. Title / snippet / url` blocks produced by `htmlSearch`

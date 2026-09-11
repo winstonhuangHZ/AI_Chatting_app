@@ -688,6 +688,21 @@ private struct ProfileEditView: View {
                 }
 
                 Section {
+                    Picker(L("search.provider"), selection: $draft.searchProvider) {
+                        ForEach(SearchProvider.allCases) { provider in
+                            Text(provider.displayName).tag(provider)
+                        }
+                    }
+                    SecureField(L("search.api.key"), text: $draft.searchAPIKey)
+                    TextField(L("search.endpoint"), text: $draft.searchEndpoint)
+                        .help(L("search.endpoint.help"))
+                } header: {
+                    Text(L("search.section"))
+                } footer: {
+                    Text(L("search.footer"))
+                }
+
+                Section {
                     Toggle(L("custom.price.enable"), isOn: customPriceEnabled)
                     if customPriceEnabled.wrappedValue {
                         TextField(L("custom.price.input"), value: customPriceInput, format: .number)

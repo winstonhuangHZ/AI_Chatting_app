@@ -1,5 +1,26 @@
 import Foundation
 
+/// Search backend used by the `web_search` Agent tool.
+enum SearchProvider: String, Codable, CaseIterable, Identifiable {
+    case automatic
+    case brave
+    case serper
+    case tavily
+    case searxng
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .automatic: return "Auto"
+        case .brave:     return "Brave Search API"
+        case .serper:    return "Serper.dev (Google)"
+        case .tavily:    return "Tavily"
+        case .searxng:   return "SearXNG (self-hosted)"
+        }
+    }
+}
+
 /// Price for one model as reported by the relay (OpenRouter-style extension).
 ///
 /// Many OpenAI-compatible relays (one-api / new-api / OpenRouter format)
@@ -97,6 +118,15 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     /// when the name-based heuristic says the model is text-only.
     var modelVisionOverrides: [String: Bool]
 
+    /// Preferred web-search backend for the Agent `web_search` tool.
+    var searchProvider: SearchProvider
+
+    /// API key for Brave / Serper / Tavily.
+    var searchAPIKey: String
+
+    /// Custom endpoint for SearXNG (e.g. https://searx.example.com).
+    var searchEndpoint: String
+
     /// Editable system prompt. Sent as the first `system` message on every
     /// request. The default preset tells the model Markdown is rendered.
     var systemPrompt: String
@@ -180,6 +210,9 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         modelContextWindows: [String: Int] = [:],
         contextWindowOverride: Int? = nil,
         modelVisionOverrides: [String: Bool] = [:],
+        searchProvider: SearchProvider = .automatic,
+        searchAPIKey: String = "",
+        searchEndpoint: String = "",
         systemPrompt: String = APIServerConfig.defaultSystemPrompt,
         streamEnabled: Bool = true,
         includeTimestamp: Bool = false,
@@ -197,6 +230,9 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         self.modelContextWindows = modelContextWindows
         self.contextWindowOverride = contextWindowOverride
         self.modelVisionOverrides = modelVisionOverrides
+        self.searchProvider = searchProvider
+        self.searchAPIKey = searchAPIKey
+        self.searchEndpoint = searchEndpoint
         self.systemPrompt = systemPrompt
         self.streamEnabled = streamEnabled
         self.includeTimestamp = includeTimestamp
@@ -228,6 +264,9 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         modelContextWindows = try container.decodeIfPresent([String: Int].self, forKey: .modelContextWindows) ?? [:]
         contextWindowOverride = try container.decodeIfPresent(Int.self, forKey: .contextWindowOverride)
         modelVisionOverrides = try container.decodeIfPresent([String: Bool].self, forKey: .modelVisionOverrides) ?? [:]
+        searchProvider = try container.decodeIfPresent(SearchProvider.self, forKey: .searchProvider) ?? .automatic
+        searchAPIKey = try container.decodeIfPresent(String.self, forKey: .searchAPIKey) ?? ""
+        searchEndpoint = try container.decodeIfPresent(String.self, forKey: .searchEndpoint) ?? ""
         systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
             ?? APIServerConfig.defaultSystemPrompt
         streamEnabled = try container.decodeIfPresent(Bool.self, forKey: .streamEnabled) ?? true
