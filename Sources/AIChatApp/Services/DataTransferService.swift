@@ -534,6 +534,7 @@ enum DataTransferService {
         profiles.map { profile in
             var copy = profile
             copy.apiKey = ""
+            copy.searchAPIKey = ""
             return copy
         }
     }

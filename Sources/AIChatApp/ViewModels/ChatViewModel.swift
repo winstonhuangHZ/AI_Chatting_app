@@ -907,7 +907,8 @@ final class ChatViewModel: ObservableObject {
         ChatTools.setSearchConfiguration(.init(
             provider: configForRequest.searchProvider,
             apiKey: configForRequest.searchAPIKey,
-            endpoint: configForRequest.searchEndpoint
+            endpoint: configForRequest.searchEndpoint,
+            order: configForRequest.searchProviderOrder
         ))
 
         streamTask = Task { [weak self] in

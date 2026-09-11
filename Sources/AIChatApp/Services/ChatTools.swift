@@ -48,6 +48,7 @@ enum ChatTools {
         var provider: SearchProvider = .automatic
         var apiKey: String = ""
         var endpoint: String = ""
+        var order: [SearchProvider] = []
     }
 
     private static let searchConfigLock = NSLock()
@@ -519,69 +520,116 @@ enum WebSearch {
 
     static func search(_ query: String, maxResults: Int = 5) async throws -> String {
         let configuration = ChatTools.searchConfiguration
-        if let result = try await providerSearch(
-            query,
-            maxResults: maxResults,
-            configuration: configuration
-        ) {
-            return result
+        let defaultOrder: [SearchProvider] = [
+            .duckduckgo, .bing, .brave, .serper, .tavily, .searxng,
+        ]
+        let order: [SearchProvider]
+        if configuration.provider == .automatic {
+            order = configuration.order.isEmpty ? defaultOrder : configuration.order
+        } else {
+            order = [configuration.provider]
         }
-        if let result = try? await instantAnswer(query), !result.isEmpty {
-            return result
+
+        for provider in order {
+            if let result = try await runProvider(
+                provider,
+                query: query,
+                maxResults: maxResults,
+                configuration: configuration
+            ), !result.isEmpty {
+                return result
+            }
         }
-        if let result = try? await bingSearch(query, maxResults: maxResults), !result.isEmpty {
-            return result
+        return """
+        Web search returned no relevant results for "\(query)".
+        Check the search backend order in Settings → API → Web Search, or configure a real \
+        Search API key. If you use a proxy/VPN in TUN or fake-IP mode, its rules may be \
+        intercepting search-engine traffic.
+        """
+    }
+
+    // MARK: Relevance guard
+
+    /// Reject result sets where the engine clearly searched only the first word
+    /// (e.g. "All My Loving …" returning dictionary pages for "all").
+    private static func relevantResults(_ query: String, _ results: [ResultItem]) -> Bool {
+        let tokens = queryTokens(query)
+        guard !tokens.isEmpty else { return !results.isEmpty }
+        let required = min(2, tokens.count)
+
+        for result in results {
+            let haystack = (result.title + " " + result.snippet + " " + result.url).lowercased()
+            let hits = tokens.filter { haystack.contains($0) }.count
+            if hits >= required { return true }
         }
-        return try await htmlSearch(query, maxResults: maxResults)
+        return false
+    }
+
+    private static let searchStopWords: Set<String> = [
+        "the", "and", "for", "with", "that", "this", "from", "what", "when",
+        "where", "which", "who", "why", "how", "are", "was", "were", "does",
+        "did", "you", "your", "about", "into", "out", "over", "under", "vs",
+    ]
+
+    private static func queryTokens(_ query: String) -> [String] {
+        var tokens = Set<String>()
+        let words = query.lowercased().split { !$0.isLetter && !$0.isNumber }
+        for word in words where word.count >= 3 {
+            let token = String(word)
+            if !searchStopWords.contains(token) {
+                tokens.insert(token)
+            }
+        }
+        // CJK queries: add 2-character n-grams so Chinese search is validated too.
+        for run in query.split(whereSeparator: { !$0.isLetter }) {
+            let chars = Array(run)
+            guard chars.count >= 2,
+                  chars.contains(where: { $0.unicodeScalars.first.map { $0.value >= 0x3400 } ?? false })
+            else { continue }
+            for index in 0..<(chars.count - 1) {
+                tokens.insert(String(chars[index...index + 1]))
+            }
+        }
+        return Array(tokens)
     }
 
     // MARK: Configured API providers
 
-    private static func providerSearch(
-        _ query: String,
+    /// Runs one backend in the user's priority order. Missing credentials for
+    /// that backend simply skip it (Auto mode) or return a clear error when the
+    /// provider was explicitly forced.
+    private static func runProvider(
+        _ provider: SearchProvider,
+        query: String,
         maxResults: Int,
         configuration: ChatTools.WebSearchConfiguration
     ) async throws -> String? {
-        switch configuration.provider {
+        let forced = configuration.provider != .automatic
+        switch provider {
         case .automatic:
-            if !configuration.apiKey.isEmpty {
-                if let result = try? await tavily(query, key: configuration.apiKey, maxResults: maxResults),
-                   !result.hasPrefix("Error:") {
-                    return result
-                }
-                if let result = try? await brave(query, key: configuration.apiKey, maxResults: maxResults),
-                   !result.hasPrefix("Error:") {
-                    return result
-                }
-                if let result = try? await serper(query, key: configuration.apiKey, maxResults: maxResults),
-                   !result.hasPrefix("Error:") {
-                    return result
-                }
-            }
-            if !configuration.endpoint.isEmpty,
-               let result = try? await searxng(query, endpoint: configuration.endpoint, maxResults: maxResults),
-               !result.hasPrefix("Error:") {
-                return result
-            }
             return nil
+        case .duckduckgo:
+            return try await htmlSearch(query, maxResults: maxResults)
+        case .bing:
+            return try await bingSearch(query, maxResults: maxResults)
         case .brave:
             guard !configuration.apiKey.isEmpty else {
-                return "Error: Brave Search selected, but no search API key is configured."
+                return forced ? "Error: Brave Search selected, but no search API key is configured." : nil
             }
             return try await brave(query, key: configuration.apiKey, maxResults: maxResults)
         case .serper:
             guard !configuration.apiKey.isEmpty else {
-                return "Error: Serper selected, but no search API key is configured."
+                return forced ? "Error: Serper selected, but no search API key is configured." : nil
             }
             return try await serper(query, key: configuration.apiKey, maxResults: maxResults)
         case .tavily:
             guard !configuration.apiKey.isEmpty else {
-                return "Error: Tavily selected, but no search API key is configured."
+                return forced ? "Error: Tavily selected, but no search API key is configured." : nil
             }
             return try await tavily(query, key: configuration.apiKey, maxResults: maxResults)
         case .searxng:
             guard !configuration.endpoint.isEmpty else {
-                return "Error: SearXNG selected, but no endpoint URL is configured."
+                return forced ? "Error: SearXNG selected, but no endpoint URL is configured." : nil
             }
             return try await searxng(query, endpoint: configuration.endpoint, maxResults: maxResults)
         }
@@ -824,6 +872,7 @@ enum WebSearch {
             results.append(ResultItem(title: title, snippet: snippet, url: url))
         }
         guard !results.isEmpty else { return "" }
+        guard relevantResults(query, results) else { return "" }
 
         var output = "Web search results for \"\(query)\":\n"
         for (index, result) in results.enumerated() {
@@ -878,7 +927,10 @@ enum WebSearch {
 
         let results = parseResults(from: html, maxResults: maxResults)
         guard !results.isEmpty else {
-            return "No web results found for \"\(query)\"."
+            return ""
+        }
+        guard relevantResults(query, results) else {
+            return ""
         }
 
         var output = "Web search results for \"\(query)\":\n"

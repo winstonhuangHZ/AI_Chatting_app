@@ -1,8 +1,10 @@
 import Foundation
 
 /// Search backend used by the `web_search` Agent tool.
-enum SearchProvider: String, Codable, CaseIterable, Identifiable {
+enum SearchProvider: String, Codable, CaseIterable, Identifiable, Sendable {
     case automatic
+    case duckduckgo
+    case bing
     case brave
     case serper
     case tavily
@@ -13,6 +15,8 @@ enum SearchProvider: String, Codable, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .automatic: return "Auto"
+        case .duckduckgo: return "DuckDuckGo (HTML)"
+        case .bing:       return "Bing (RSS)"
         case .brave:     return "Brave Search API"
         case .serper:    return "Serper.dev (Google)"
         case .tavily:    return "Tavily"
@@ -127,6 +131,9 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
     /// Custom endpoint for SearXNG (e.g. https://searx.example.com).
     var searchEndpoint: String
 
+    /// Priority order used when `searchProvider == .automatic`.
+    var searchProviderOrder: [SearchProvider]
+
     /// Editable system prompt. Sent as the first `system` message on every
     /// request. The default preset tells the model Markdown is rendered.
     var systemPrompt: String
@@ -213,6 +220,9 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         searchProvider: SearchProvider = .automatic,
         searchAPIKey: String = "",
         searchEndpoint: String = "",
+        searchProviderOrder: [SearchProvider] = [
+            .duckduckgo, .bing, .brave, .serper, .tavily, .searxng,
+        ],
         systemPrompt: String = APIServerConfig.defaultSystemPrompt,
         streamEnabled: Bool = true,
         includeTimestamp: Bool = false,
@@ -233,6 +243,7 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         self.searchProvider = searchProvider
         self.searchAPIKey = searchAPIKey
         self.searchEndpoint = searchEndpoint
+        self.searchProviderOrder = searchProviderOrder
         self.systemPrompt = systemPrompt
         self.streamEnabled = streamEnabled
         self.includeTimestamp = includeTimestamp
@@ -267,6 +278,10 @@ struct APIServerConfig: Identifiable, Codable, Hashable {
         searchProvider = try container.decodeIfPresent(SearchProvider.self, forKey: .searchProvider) ?? .automatic
         searchAPIKey = try container.decodeIfPresent(String.self, forKey: .searchAPIKey) ?? ""
         searchEndpoint = try container.decodeIfPresent(String.self, forKey: .searchEndpoint) ?? ""
+        let decodedOrder = try container.decodeIfPresent([SearchProvider].self, forKey: .searchProviderOrder) ?? []
+        searchProviderOrder = decodedOrder.isEmpty
+            ? [.duckduckgo, .bing, .brave, .serper, .tavily, .searxng]
+            : decodedOrder.filter { $0 != .automatic }
         systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
             ?? APIServerConfig.defaultSystemPrompt
         streamEnabled = try container.decodeIfPresent(Bool.self, forKey: .streamEnabled) ?? true

@@ -62,6 +62,12 @@ final class ConfigStore: ObservableObject {
                     keychainSecrets[account] = legacy
                     hydrated[index].apiKey = legacy
                 }
+                // Search API keys use a derived account in the same map.
+                if let searchKey = keychainSecrets[Self.searchAccount(for: account)] {
+                    hydrated[index].searchAPIKey = searchKey
+                } else if !hydrated[index].searchAPIKey.isEmpty {
+                    keychainSecrets[Self.searchAccount(for: account)] = hydrated[index].searchAPIKey
+                }
             }
             self.configs = hydrated
         } else {
@@ -120,6 +126,11 @@ final class ConfigStore: ObservableObject {
                 hydrated[index].apiKey = key
             }
         }
+        for index in hydrated.indices where hydrated[index].searchAPIKey.isEmpty {
+            if let key = keychainSecrets[Self.searchAccount(for: hydrated[index].id.uuidString)] {
+                hydrated[index].searchAPIKey = key
+            }
+        }
 
         configs = hydrated
         activeConfigID = configs.first?.id
@@ -160,8 +171,13 @@ final class ConfigStore: ObservableObject {
         // confirmed it stored the secret; otherwise we would erase the last
         // remaining copy of the key on a transient Keychain failure.
         var secrets: [String: String] = [:]
-        for config in configs where !config.apiKey.isEmpty {
-            secrets[config.id.uuidString] = config.apiKey
+        for config in configs {
+            if !config.apiKey.isEmpty {
+                secrets[config.id.uuidString] = config.apiKey
+            }
+            if !config.searchAPIKey.isEmpty {
+                secrets[Self.searchAccount(for: config.id.uuidString)] = config.searchAPIKey
+            }
         }
         // Persist the actual map copy; if writing fails keep the in-memory key.
         if !secrets.isEmpty {
@@ -175,6 +191,7 @@ final class ConfigStore: ObservableObject {
         let sanitized = configs.map { config -> APIServerConfig in
             var copy = config
             copy.apiKey = ""
+            copy.searchAPIKey = ""
             return copy
         }
         guard let data = try? JSONEncoder().encode(sanitized) else { return }
@@ -182,6 +199,10 @@ final class ConfigStore: ObservableObject {
         defaults.set(data, forKey: Self.configsKey)
         // Synchronous flush so profiles survive an immediate quit / power loss.
         defaults.synchronize()
+    }
+
+    private static func searchAccount(for profileID: String) -> String {
+        "\(profileID)#search"
     }
 
 }

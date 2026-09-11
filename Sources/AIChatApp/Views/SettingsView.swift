@@ -696,6 +696,33 @@ private struct ProfileEditView: View {
                     SecureField(L("search.api.key"), text: $draft.searchAPIKey)
                     TextField(L("search.endpoint"), text: $draft.searchEndpoint)
                         .help(L("search.endpoint.help"))
+
+                    if draft.searchProvider == .automatic {
+                        Text(L("search.order"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ForEach(Array(draft.searchProviderOrder.enumerated()), id: \.element) { index, provider in
+                            HStack {
+                                Text("\(index + 1). \(provider.displayName)")
+                                    .font(.caption)
+                                Spacer()
+                                Button {
+                                    moveSearchProvider(index, by: -1)
+                                } label: {
+                                    Image(systemName: "chevron.up")
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(index == 0)
+                                Button {
+                                    moveSearchProvider(index, by: 1)
+                                } label: {
+                                    Image(systemName: "chevron.down")
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(index >= draft.searchProviderOrder.count - 1)
+                            }
+                        }
+                    }
                 } header: {
                     Text(L("search.section"))
                 } footer: {
@@ -807,5 +834,14 @@ private struct ProfileEditView: View {
         draft.name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
         draft.baseURL = draft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         onSave(draft)
+    }
+
+    private func moveSearchProvider(_ index: Int, by delta: Int) {
+        let target = index + delta
+        guard index >= 0,
+              index < draft.searchProviderOrder.count,
+              target >= 0,
+              target < draft.searchProviderOrder.count else { return }
+        draft.searchProviderOrder.swapAt(index, target)
     }
 }
