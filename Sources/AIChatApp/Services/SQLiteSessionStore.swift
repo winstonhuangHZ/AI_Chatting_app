@@ -81,6 +81,18 @@ final class SQLiteSessionStore {
     // MARK: - Load
 
     func loadAll() -> [ChatSession] {
+        let metas = loadSessionMetas()
+        guard !metas.isEmpty else { return [] }
+        return metas.map { meta in
+            var session = meta
+            session.messages = loadMessages(sessionID: meta.id)
+            return session
+        }
+    }
+
+    /// Metadata-only load: no message bodies. Used by the lazy/paged session
+    /// store so startup does not pull the whole history into memory.
+    func loadSessionMetas() -> [ChatSession] {
         lock.lock()
         defer { lock.unlock() }
         guard let db else { return [] }
@@ -101,16 +113,14 @@ final class SQLiteSessionStore {
         sqlite3_finalize(statement)
         guard !metas.isEmpty else { return [] }
 
-        var messagesBySession: [UUID: [ChatMessage]] = [:]
+        // One grouped query gives every session its message count.
+        var counts: [UUID: Int] = [:]
         statement = nil
-        if sqlite3_prepare_v2(db, "SELECT session_id, json FROM messages ORDER BY session_id, sort_index;", -1, &statement, nil) == SQLITE_OK {
+        if sqlite3_prepare_v2(db, "SELECT session_id, COUNT(*) FROM messages GROUP BY session_id;", -1, &statement, nil) == SQLITE_OK {
             while sqlite3_step(statement) == SQLITE_ROW {
                 guard let idText = sqlite3_column_text(statement, 0),
-                      let jsonText = sqlite3_column_text(statement, 1),
-                      let sessionID = UUID(uuidString: String(cString: idText)),
-                      let data = String(cString: jsonText).data(using: .utf8),
-                      let message = try? JSONDecoder().decode(ChatMessage.self, from: data) else { continue }
-                messagesBySession[sessionID, default: []].append(message)
+                      let sessionID = UUID(uuidString: String(cString: idText)) else { continue }
+                counts[sessionID] = Int(sqlite3_column_int64(statement, 1))
             }
         }
         sqlite3_finalize(statement)
@@ -118,8 +128,53 @@ final class SQLiteSessionStore {
         return metas
             .sorted { $0.1 < $1.1 }
             .map { meta, _ in
-                meta.makeSession(messages: messagesBySession[meta.id] ?? [])
+                var session = meta.makeSession(messages: [])
+                session.messageCount = counts[meta.id] ?? 0
+                session.messagesLoaded = false
+                return session
             }
+    }
+
+    /// Loads message bodies for one session. `limit`/`beforeSortIndex` page
+    /// older messages; nil limit loads everything (the current default).
+    func loadMessages(
+        sessionID: UUID,
+        limit: Int? = nil,
+        beforeSortIndex: Int? = nil
+    ) -> [ChatMessage] {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let db else { return [] }
+
+        var sql = "SELECT json FROM messages WHERE session_id = ?"
+        var binds = 1
+        if beforeSortIndex != nil {
+            sql += " AND sort_index < ?"
+            binds += 1
+        }
+        if let limit {
+            sql += " ORDER BY sort_index DESC LIMIT \(max(1, limit))"
+        } else {
+            sql += " ORDER BY sort_index ASC"
+        }
+
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
+        sqlite3_bind_text(statement, 1, (sessionID.uuidString as NSString).utf8String, -1, Self.transient)
+        if let beforeSortIndex {
+            sqlite3_bind_int64(statement, 2, Int64(beforeSortIndex))
+        }
+
+        var messages: [ChatMessage] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let jsonText = sqlite3_column_text(statement, 0),
+                  let data = String(cString: jsonText).data(using: .utf8),
+                  let message = try? JSONDecoder().decode(ChatMessage.self, from: data) else { continue }
+            messages.append(message)
+        }
+        if limit != nil { messages.reverse() }
+        return messages
     }
 
     // MARK: - Snapshot write

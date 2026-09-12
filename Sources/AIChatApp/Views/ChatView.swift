@@ -59,7 +59,7 @@ struct ChatView: View {
             .buttonStyle(.borderedProminent)
             .tint(appearance.accentColor)
             .controlSize(.small)
-            .disabled(chatViewModel.activeSession?.messages.isEmpty == true || chatViewModel.isGeneratingBlock)
+            .disabled((chatViewModel.activeSession?.messageCount ?? 0) == 0 || chatViewModel.isGeneratingBlock)
             .help(L("kb.generate.help"))
             .animation(.easeInOut(duration: 0.2), value: chatViewModel.isGeneratingBlock)
         }

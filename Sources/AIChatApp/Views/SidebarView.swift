@@ -335,7 +335,7 @@ struct SidebarView: View {
             } label: {
                 Label(L("export.pdf"), systemImage: "arrow.down.doc")
             }
-            .disabled(session.messages.isEmpty)
+            .disabled(session.messageCount == 0)
 
             Divider()
 
@@ -350,6 +350,7 @@ struct SidebarView: View {
     /// Exports one session to PDF, surfacing failures in the chat error banner.
     private func exportPDF(_ session: ChatSession) {
         do {
+            chatViewModel.ensureMessagesLoaded(for: session)
             if let url = try PDFExportService.export(
                 session: session,
                 appearance: appearance,
@@ -417,11 +418,11 @@ private struct SidebarRow: View {
                     Text(session.createdAt, style: .relative)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    if !session.messages.isEmpty {
+                    if session.messageCount > 0 {
                         Text("•")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
-                        Text(L("msgs.count", session.messages.count))
+                        Text(L("msgs.count", session.messageCount))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }

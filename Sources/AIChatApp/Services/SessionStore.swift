@@ -71,7 +71,7 @@ final class SessionStore: ObservableObject {
 
         let defaults = UserDefaults.standard
 
-        let databaseSessions = database?.loadAll() ?? []
+        let databaseSessions = database?.loadSessionMetas() ?? []
         if !databaseSessions.isEmpty {
             self.sessions = databaseSessions
             defaults.set(true, forKey: Self.migratedFlagKey)
@@ -181,6 +181,31 @@ final class SessionStore: ObservableObject {
 
     // MARK: - Session management
 
+    /// Loads one session's message bodies from SQLite on demand.
+    @discardableResult
+    func loadMessagesIfNeeded(_ sessionID: UUID) -> Bool {
+        guard let sqlite,
+              let index = sessions.firstIndex(where: { $0.id == sessionID }),
+              !sessions[index].messagesLoaded else { return false }
+        let messages = sqlite.loadMessages(sessionID: sessionID)
+        sessions[index].messages = messages
+        sessions[index].messageCount = messages.count
+        sessions[index].messagesLoaded = true
+        return true
+    }
+
+    /// Loads every session's messages (used before export/import and by the
+    /// in-memory search fallback).
+    func loadAllMessages() {
+        guard let sqlite else { return }
+        for index in sessions.indices where !sessions[index].messagesLoaded {
+            let messages = sqlite.loadMessages(sessionID: sessions[index].id)
+            sessions[index].messages = messages
+            sessions[index].messageCount = messages.count
+            sessions[index].messagesLoaded = true
+        }
+    }
+
     /// Creates a new empty session and makes it active.
     @discardableResult
     func newSession() -> ChatSession {
@@ -281,7 +306,14 @@ final class SessionStore: ObservableObject {
     func replaceAll(with new: [ChatSession]) {
         cancelPersistPause()
         let externalized = Self.externalizingAttachments(in: new).0
-        sessions = externalized.sorted { $0.createdAt > $1.createdAt }
+        sessions = externalized
+            .map { session -> ChatSession in
+                var session = session
+                session.messageCount = session.messages.count
+                session.messagesLoaded = true
+                return session
+            }
+            .sorted { $0.createdAt > $1.createdAt }
         activeSessionID = sessions.first?.id
         persistPaused = false
         if let sqlite {
@@ -303,6 +335,7 @@ final class SessionStore: ObservableObject {
     func appendMessage(_ message: ChatMessage, to sessionID: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
         sessions[index].messages.append(message)
+        sessions[index].messageCount = sessions[index].messages.count
         sessions[index].autoTitle()
         persistMessage(message, in: sessionID)
         persistSession(sessions[index])
@@ -402,6 +435,7 @@ final class SessionStore: ObservableObject {
         Self.deleteAttachmentFiles(in: [message])
         guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
         sessions[index].messages.removeAll { $0.id == message.id }
+        sessions[index].messageCount = max(0, sessions[index].messageCount - 1)
         deleteMessageRow(message.id)
     }
 
@@ -417,6 +451,7 @@ final class SessionStore: ObservableObject {
         let removedID = sessions[sessionIndex].messages[msgIndex].id
         Self.deleteAttachmentFiles(in: [sessions[sessionIndex].messages[msgIndex]])
         sessions[sessionIndex].messages.remove(at: msgIndex)
+        sessions[sessionIndex].messageCount = sessions[sessionIndex].messages.count
         deleteMessageRow(removedID)
     }
 
@@ -436,6 +471,7 @@ final class SessionStore: ObservableObject {
         )
         sessions[sessionIndex].messages.removeSubrange(messageIndex...)
         sessions[sessionIndex].messages.insert(replacement, at: messageIndex)
+        sessions[sessionIndex].messageCount = sessions[sessionIndex].messages.count
         persistWholeSessionMessages(sessionID)
         persistSession(sessions[sessionIndex])
     }

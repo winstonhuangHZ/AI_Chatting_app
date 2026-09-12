@@ -385,6 +385,16 @@ final class ChatViewModel: ObservableObject {
         activeSession?.messages ?? []
     }
 
+    /// Ensures a session's message bodies are loaded (PDF export, menus).
+    func ensureMessagesLoaded(for session: ChatSession) {
+        sessionStore.loadMessagesIfNeeded(session.id)
+    }
+
+    /// Ensures every session is materialised (backup export).
+    func ensureAllMessagesLoaded() {
+        sessionStore.loadAllMessages()
+    }
+
     /// Sessions in sidebar display order: pinned conversations first, then the
     /// store's existing recency order.
     var sidebarSessions: [ChatSession] {
@@ -483,6 +493,7 @@ final class ChatViewModel: ObservableObject {
 
         sessionStore.$activeSessionID.sink { [weak self] newID in
             self?.activeSessionID = newID
+            if let newID { self?.sessionStore.loadMessagesIfNeeded(newID) }
         }
         .store(in: &cancellables)
 
@@ -675,6 +686,7 @@ final class ChatViewModel: ObservableObject {
         guard message.role == .user,
               let sessionID = activeSessionID,
               let config = configStore.activeConfig else { return }
+        sessionStore.loadMessagesIfNeeded(sessionID)
 
         let trimmed = newContent.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !message.attachments.isEmpty || !message.documentAttachments.isEmpty else {
@@ -724,6 +736,7 @@ final class ChatViewModel: ObservableObject {
     /// answer the previous user message again.
     func retryMessage(_ message: ChatMessage) {
         guard message.role == .assistant, let sessionID = activeSessionID else { return }
+        sessionStore.loadMessagesIfNeeded(sessionID)
         guard let config = configStore.activeConfig else {
             errorMessage = L("no.active.profile")
             return
@@ -789,12 +802,14 @@ final class ChatViewModel: ObservableObject {
     /// Selects an existing session.
     func selectSession(_ session: ChatSession) {
         guard session.id != activeSessionID else { return }
+        sessionStore.loadMessagesIfNeeded(session.id)
         sessionStore.activeSessionID = session.id
     }
 
     /// Selects a session by id (used by the sidebar List selection binding).
     func selectSession(id: UUID?) {
         guard let id, id != activeSessionID else { return }
+        sessionStore.loadMessagesIfNeeded(id)
         sessionStore.activeSessionID = id
     }
 
@@ -822,6 +837,7 @@ final class ChatViewModel: ObservableObject {
         // Cancel any in-flight generation before starting a new one.
         cancelStreaming()
         clearError()
+        sessionStore.loadMessagesIfNeeded(sessionID)
 
         // Persist the user message (with any attachments).
         sessionStore.appendMessage(
@@ -1428,8 +1444,15 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        let sessionSnapshot = sessions
         let ftsHits = sessionStore.searchMessageIDs(query: query)
+        if let ftsHits {
+            for sessionID in Set(ftsHits.map(\.sessionID)) {
+                sessionStore.loadMessagesIfNeeded(sessionID)
+            }
+        } else {
+            sessionStore.loadAllMessages()
+        }
+        let sessionSnapshot = sessions
         searchTask = Task.detached(priority: .userInitiated) {
             let results: [MessageSearchResult]
             if let ftsHits {

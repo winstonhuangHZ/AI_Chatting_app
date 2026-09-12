@@ -34,6 +34,13 @@ struct ChatSession: Identifiable, Codable, Hashable {
     /// Sidebar folder id (nil = unclassified).
     var folderID: UUID?
 
+    /// Number of messages in this session (kept even when bodies are lazy-loaded).
+    var messageCount: Int
+
+    /// False when `messages` is intentionally empty because bodies have not
+    /// been loaded from SQLite yet.
+    var messagesLoaded: Bool
+
     // MARK: - Initializers
 
     init(
@@ -45,7 +52,9 @@ struct ChatSession: Identifiable, Codable, Hashable {
         isPersonalizationCollection: Bool = false,
         hasModelTitle: Bool = false,
         isPinned: Bool = false,
-        folderID: UUID? = nil
+        folderID: UUID? = nil,
+        messageCount: Int = 0,
+        messagesLoaded: Bool = true
     ) {
         self.id = id
         self.title = title
@@ -56,6 +65,8 @@ struct ChatSession: Identifiable, Codable, Hashable {
         self.hasModelTitle = hasModelTitle
         self.isPinned = isPinned
         self.folderID = folderID
+        self.messageCount = messageCount
+        self.messagesLoaded = messagesLoaded
     }
 
     /// Derives a meaningful title from the first meaningful user message.
@@ -88,7 +99,7 @@ struct ChatSession: Identifiable, Codable, Hashable {
     // in the store's `try?` decode. `emoji` is omitted from JSON when nil.
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, emoji, messages, createdAt, isPersonalizationCollection, hasModelTitle, isPinned, folderID
+        case id, title, emoji, messages, createdAt, isPersonalizationCollection, hasModelTitle, isPinned, folderID, messageCount
     }
 
     init(from decoder: Decoder) throws {
@@ -106,6 +117,8 @@ struct ChatSession: Identifiable, Codable, Hashable {
         hasModelTitle = decodedModelTitle ?? inferredFromEmoji
         isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         folderID = try container.decodeIfPresent(UUID.self, forKey: .folderID)
+        messageCount = try container.decodeIfPresent(Int.self, forKey: .messageCount) ?? messages.count
+        messagesLoaded = true
     }
 
     func encode(to encoder: Encoder) throws {
@@ -119,5 +132,6 @@ struct ChatSession: Identifiable, Codable, Hashable {
         try container.encode(hasModelTitle, forKey: .hasModelTitle)
         try container.encode(isPinned, forKey: .isPinned)
         try container.encodeIfPresent(folderID, forKey: .folderID)
+        try container.encode(messageCount, forKey: .messageCount)
     }
 }

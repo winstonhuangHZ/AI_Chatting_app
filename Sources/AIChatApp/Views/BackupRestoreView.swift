@@ -120,6 +120,7 @@ struct BackupRestoreView: View {
         }
 
         // 快照在主线程收集；重活由 writeExport 放到后台任务。
+        chatViewModel.ensureAllMessagesLoaded()
         let sessions = sessionStore.sessions
         let profiles = configStore.configs
         let preferences = userProfileStore.preferences
