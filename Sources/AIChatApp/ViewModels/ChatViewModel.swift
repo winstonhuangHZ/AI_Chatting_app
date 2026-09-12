@@ -487,18 +487,63 @@ final class ChatViewModel: ObservableObject {
         summaryGenerating.insert(session.id)
         defer { summaryGenerating.remove(session.id) }
 
-        let transcript = messages.map { message in
-            "\(message.role == .user ? "User" : "Assistant"): \(message.content)"
-        }.joined(separator: "\n\n")
+        let existing = sessionStore.summary(for: session.id)
+        func render(_ list: [ChatMessage]) -> String {
+            list.map { message in
+                let stamp = ISO8601DateFormatter().string(from: message.timestamp)
+                return "[\(stamp)] \(message.role == .user ? "User" : "Assistant"): \(message.content)"
+            }.joined(separator: "\n\n")
+        }
+
+        let payload: String
+        if let existing,
+           let coveredID = existing.coveredLastMessageID,
+           let coveredIndex = messages.firstIndex(where: { $0.id == coveredID }),
+           coveredIndex + 1 < messages.count {
+            payload = """
+            Previous summary:
+            \(existing.summary)
+
+            New messages since \(ISO8601DateFormatter().string(from: existing.updatedAt)):
+            \(render(Array(messages[(coveredIndex + 1)...])))
+
+            Merge the new messages into the previous summary.
+            """
+        } else {
+            payload = "Conversation:\n" + render(messages)
+        }
 
         do {
             let history: [ChatMessage] = [
                 .system("""
-                You are a conversation summarizer. Produce a concise, factual summary of \
-                the dialogue below. Keep decisions, conclusions, open questions and durable \
-                facts. Output only the summary text — no preamble, no headings.
+                You maintain a durable, factual summary of ONE conversation for later reuse \
+                as background context. Output ONLY the summary.
+
+                Structure (skip a section only if it is genuinely empty):
+                ## 主题
+                ## 用户关心的问题
+                ## 已核实的事实（带来源/锚点）
+                ## 未证实 / 推测 / 传闻
+                ## 结论
+                ## 未决问题
+
+                Rules:
+                - Label every non-obvious claim as 已核实 / 传闻 / 推测. Never present a \
+                  guess as a fact.
+                - Keep exact anchors: dates, case numbers, book/article titles, DOIs, URLs, \
+                  names, quantities. Convert relative times ("yesterday", "2 hours ago") to \
+                  absolute dates using the message timestamps.
+                - Do not describe what the assistant did ("the assistant checked…"); state \
+                  the knowledge itself and its status.
+                - Never invent sources or details. If a primary source was not found, write \
+                  "未找到一手来源".
+                - Preserve the user's own claims, questions and preferences as user-stated.
+                - Drop small talk, greetings and resolved tangents.
+                - Aim for 300–600 Chinese characters (or ~200–400 English words); stay \
+                  compact even when updating a previous summary.
+                - Write in the language used predominantly in the conversation.
                 """),
-                .user(transcript),
+                .user(payload),
             ]
             let stream = try await service.streamChat(
                 config: config,
