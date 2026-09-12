@@ -13,7 +13,7 @@ set -euo pipefail
 APP_NAME="AIChatApp"
 BUILD_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ARCHS="${ARCHS:-arm64 x86_64}"
-VERSION="${VERSION:-1.3.0}"
+VERSION="${VERSION:-1.3.1}"
 
 STAGE="$BUILD_ROOT/.stage/$APP_NAME.app"
 DMG_PATH="$BUILD_ROOT/dist/$APP_NAME-$VERSION.dmg"

@@ -476,6 +476,30 @@ final class SessionStore: ObservableObject {
         persistSession(sessions[sessionIndex])
     }
 
+    /// Edit-and-resend: replaces the edited user message, drops the old suffix
+    /// and appends the assistant placeholder in ONE mutation, so SwiftUI never
+    /// renders the intermediate (truncated-but-not-yet-regenerating) layout.
+    func replaceUserMessageAndAppendAssistant(
+        messageID: UUID,
+        replacement: ChatMessage,
+        assistant: ChatMessage,
+        in sessionID: UUID
+    ) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let messageIndex = sessions[sessionIndex].messages.firstIndex(where: { $0.id == messageID }) else {
+            return
+        }
+        Self.deleteAttachmentFiles(
+            in: Array(sessions[sessionIndex].messages[messageIndex...])
+        )
+        sessions[sessionIndex].messages.removeSubrange(messageIndex...)
+        sessions[sessionIndex].messages.insert(replacement, at: messageIndex)
+        sessions[sessionIndex].messages.append(assistant)
+        sessions[sessionIndex].messageCount = sessions[sessionIndex].messages.count
+        persistWholeSessionMessages(sessionID)
+        persistSession(sessions[sessionIndex])
+    }
+
     // MARK: - Assistant answer versions (regenerate branches)
 
     /// Prepares the last assistant message to receive a regenerated answer while

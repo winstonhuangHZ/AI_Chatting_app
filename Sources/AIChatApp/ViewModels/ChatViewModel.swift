@@ -704,9 +704,12 @@ final class ChatViewModel: ObservableObject {
             documentAttachments: message.documentAttachments,
             timestamp: message.timestamp
         )
-        sessionStore.replaceMessageAndRemoveFollowing(
+        var assistant = ChatMessage.assistant()
+        assistant.model = config.selectedModel
+        sessionStore.replaceUserMessageAndAppendAssistant(
             messageID: message.id,
-            with: replacement,
+            replacement: replacement,
+            assistant: assistant,
             in: sessionID
         )
 
@@ -728,7 +731,8 @@ final class ChatViewModel: ObservableObject {
             sessionID: sessionID,
             config: config,
             model: config.selectedModel,
-            history: history
+            history: history,
+            preparedAssistantID: assistant.id
         )
     }
 
@@ -934,6 +938,7 @@ final class ChatViewModel: ObservableObject {
         model: String,
         history: [ChatMessage],
         reusingAssistantID: UUID? = nil,
+        preparedAssistantID: UUID? = nil,
         forceVision: Bool = false
     ) {
         streamGeneration += 1
@@ -944,7 +949,12 @@ final class ChatViewModel: ObservableObject {
         sessionStore.persistPaused = true
 
         let assistantMessageID: UUID
-        if let reusingAssistantID {
+        if let preparedAssistantID {
+            // Edit-and-resend already inserted the placeholder together with the
+            // edited user message in a single store mutation, so the list does
+            // not render an intermediate layout.
+            assistantMessageID = preparedAssistantID
+        } else if let reusingAssistantID {
             // Regenerate branch: reuse the existing assistant bubble, preserving
             // the previous answer as a version instead of appending a new row.
             sessionStore.prepareAssistantForRegeneration(

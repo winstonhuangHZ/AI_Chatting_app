@@ -717,8 +717,6 @@ private struct MessageList: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .animation(.spring(response: 0.3, dampingFraction: 0.85),
-                       value: pinnedMessageID)
             .onPreferenceChange(MessageListBottomEdgeKey.self) { bottomEdgeY = $0 }
             .onPreferenceChange(MessageListViewportHeightKey.self) { viewportHeight = $0 }
             .onChange(of: scrollAtBottom) { _, atBottom in
@@ -747,9 +745,16 @@ private struct MessageList: View {
                 // so LazyVStack has a real bottom to scroll to.
                 let newLastID = session.messages.last?.id
                 DispatchQueue.main.async {
-                    withAnimation(.smooth(duration: 0.25)) {
-                        pinnedMessageID = newLastID
-                    }
+                    pinnedMessageID = newLastID
+                }
+            }
+            .onChange(of: session.messages.count) { oldCount, newCount in
+                // Structural edits (edit-and-resend truncates history, delete,
+                // branch switching) must release the old pin immediately;
+                // otherwise the scroll view animates between two layouts and
+                // the whole list visibly twitches.
+                if newCount < oldCount {
+                    pinnedMessageID = nil
                 }
             }
             .onChange(of: session.messages.last?.id) { _, newID in
@@ -761,9 +766,7 @@ private struct MessageList: View {
                     return
                 }
                 if isNearBottom || pinnedMessageID != nil {
-                    withAnimation(.smooth(duration: 0.25)) {
-                        pinnedMessageID = newID
-                    }
+                    pinnedMessageID = newID
                 }
             }
             .onChange(of: streamingMessageID) { oldID, newID in
@@ -773,9 +776,7 @@ private struct MessageList: View {
                 if oldID == nil, newID != nil {
                     followStreamingContent = isNearBottom
                     if followStreamingContent, let id = session.messages.last?.id {
-                        withAnimation(.smooth(duration: 0.25)) {
-                            pinnedMessageID = id
-                        }
+                        pinnedMessageID = id
                     }
                 } else if newID == nil {
                     // Streaming finished: the bubble switches from lightweight
@@ -783,9 +784,7 @@ private struct MessageList: View {
                     // following, re-pin to the finished message so the viewport
                     // does not drift back into earlier content.
                     if followStreamingContent || isNearBottom {
-                        withAnimation(.smooth(duration: 0.25)) {
-                            pinnedMessageID = session.messages.last?.id
-                        }
+                        pinnedMessageID = session.messages.last?.id
                     }
                     followStreamingContent = false
                 }
