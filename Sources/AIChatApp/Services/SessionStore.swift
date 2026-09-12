@@ -108,6 +108,7 @@ final class SessionStore: ObservableObject {
         let session = ChatSession()
         sessions.insert(session, at: 0)
         activeSessionID = session.id
+        persistAllSessionMetas()
         return session
     }
 
@@ -121,12 +122,15 @@ final class SessionStore: ObservableObject {
         )
         sessions.insert(session, at: 0)
         activeSessionID = session.id
+        persistAllSessionMetas()
         return session
     }
 
     /// Deletes a session (by id).
     func delete(_ session: ChatSession) {
         sessions.removeAll { $0.id == session.id }
+        deleteSessionRow(session.id)
+        persistAllSessionMetas()
 
         if activeSessionID == session.id {
             activeSessionID = sessions.first?.id
@@ -138,23 +142,27 @@ final class SessionStore: ObservableObject {
     func togglePin(_ session: ChatSession) {
         guard let index = sessions.firstIndex(where: { $0.id == session.id }) else { return }
         sessions[index].isPinned.toggle()
+        persistSession(sessions[index])
     }
 
     /// Moves a session into (or out of) a folder.
     func move(_ session: ChatSession, to folderID: UUID?) {
         guard let index = sessions.firstIndex(where: { $0.id == session.id }) else { return }
         sessions[index].folderID = folderID
+        persistSession(sessions[index])
     }
 
     func move(sessionID: UUID, to folderID: UUID?) {
         guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
         sessions[index].folderID = folderID
+        persistSession(sessions[index])
     }
 
     /// Clears folder membership after a folder is deleted.
     func clearFolder(_ folderID: UUID) {
         for index in sessions.indices where sessions[index].folderID == folderID {
             sessions[index].folderID = nil
+            persistSession(sessions[index])
         }
     }
 
@@ -174,12 +182,16 @@ final class SessionStore: ObservableObject {
             let cleaned = emoji.trimmingCharacters(in: .whitespacesAndNewlines)
             sessions[index].emoji = cleaned.isEmpty ? nil : cleaned
         }
+        persistSession(sessions[index])
     }
 
     /// Deletes all sessions.
     func deleteAll() {
         sessions.removeAll()
         activeSessionID = nil
+        if let sqlite {
+            Self.persistQueue.async { sqlite.deleteAll() }
+        }
     }
 
     /// Replaces the entire session list (used when importing a backup).
@@ -188,6 +200,14 @@ final class SessionStore: ObservableObject {
         sessions = new.sorted { $0.createdAt > $1.createdAt }
         activeSessionID = sessions.first?.id
         persistPaused = false
+        if let sqlite {
+            let snapshot = sessions
+            Self.persistQueue.async {
+                if sqlite.replaceAll(snapshot) {
+                    UserDefaults.standard.set(true, forKey: Self.migratedFlagKey)
+                }
+            }
+        }
     }
 
     /// Cancels any active persistence pause and forces a write.
@@ -200,6 +220,8 @@ final class SessionStore: ObservableObject {
         guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
         sessions[index].messages.append(message)
         sessions[index].autoTitle()
+        persistMessage(message, in: sessionID)
+        persistSession(sessions[index])
     }
 
     /// Applies AI-chosen session metadata (first-round `set_session_metadata`
@@ -215,6 +237,7 @@ final class SessionStore: ObservableObject {
             sessions[index].title = title
             sessions[index].hasModelTitle = true
         }
+        persistSession(sessions[index])
     }
 
     /// Updates the content of the last assistant message in a session.
@@ -228,6 +251,7 @@ final class SessionStore: ObservableObject {
             return
         }
         sessions[sessionIndex].messages[msgIndex].content = content
+        persistMessage(sessions[sessionIndex].messages[msgIndex], in: sessionID)
     }
 
     /// Attaches source references to the last assistant message in a session
@@ -239,6 +263,7 @@ final class SessionStore: ObservableObject {
             return
         }
         sessions[sessionIndex].messages[msgIndex].sources = sources
+        persistMessage(sessions[sessionIndex].messages[msgIndex], in: sessionID)
     }
 
     /// Records the model that produced the last assistant message (info popover).
@@ -249,6 +274,7 @@ final class SessionStore: ObservableObject {
             return
         }
         sessions[sessionIndex].messages[msgIndex].model = model
+        persistMessage(sessions[sessionIndex].messages[msgIndex], in: sessionID)
     }
 
     /// Records the relay-reported token usage for the last assistant message.
@@ -259,6 +285,7 @@ final class SessionStore: ObservableObject {
             return
         }
         sessions[sessionIndex].messages[msgIndex].usage = usage
+        persistMessage(sessions[sessionIndex].messages[msgIndex], in: sessionID)
     }
 
     /// Records the tool-call flow executed while producing the last assistant
@@ -270,6 +297,7 @@ final class SessionStore: ObservableObject {
             return
         }
         sessions[sessionIndex].messages[msgIndex].toolFlow = flow
+        persistMessage(sessions[sessionIndex].messages[msgIndex], in: sessionID)
     }
 
     /// Records the DeepSeek `reasoning_content` ("thinking") of the last
@@ -282,12 +310,14 @@ final class SessionStore: ObservableObject {
             return
         }
         sessions[sessionIndex].messages[msgIndex].reasoningContent = reasoning
+        persistMessage(sessions[sessionIndex].messages[msgIndex], in: sessionID)
     }
 
     /// Deletes a single message (by id) from the given session.
     func deleteMessage(_ message: ChatMessage, in sessionID: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
         sessions[index].messages.removeAll { $0.id == message.id }
+        deleteMessageRow(message.id)
     }
 
     /// Removes a partially-received assistant message (used when a stream fails
@@ -299,7 +329,9 @@ final class SessionStore: ObservableObject {
               sessions[sessionIndex].messages[msgIndex].content.isEmpty else {
             return
         }
+        let removedID = sessions[sessionIndex].messages[msgIndex].id
         sessions[sessionIndex].messages.remove(at: msgIndex)
+        deleteMessageRow(removedID)
     }
 
     /// Replaces a user message in place and drops every later message, so the
@@ -315,6 +347,8 @@ final class SessionStore: ObservableObject {
         }
         sessions[sessionIndex].messages.removeSubrange(messageIndex...)
         sessions[sessionIndex].messages.insert(replacement, at: messageIndex)
+        persistWholeSessionMessages(sessionID)
+        persistSession(sessions[sessionIndex])
     }
 
     // MARK: - Assistant answer versions (regenerate branches)
@@ -347,6 +381,7 @@ final class SessionStore: ObservableObject {
         message.toolFlow = []
         message.reasoningContent = nil
         sessions[sessionIndex].messages[messageIndex] = message
+        persistMessage(message, in: sessionID)
     }
 
     /// Commits the currently-streamed answer as a new version once it finished.
@@ -365,6 +400,7 @@ final class SessionStore: ObservableObject {
         message.versions.append(ChatMessageVersion(message: message))
         message.activeVersionIndex = message.versions.count - 1
         sessions[sessionIndex].messages[messageIndex] = message
+        persistMessage(message, in: sessionID)
     }
 
     /// Convenience for streaming paths that only know the originating session.
@@ -397,6 +433,7 @@ final class SessionStore: ObservableObject {
         sessions[sessionIndex].messages[messageIndex].sources = version.sources
         sessions[sessionIndex].messages[messageIndex].toolFlow = version.toolFlow
         sessions[sessionIndex].messages[messageIndex].reasoningContent = version.reasoningContent
+        persistMessage(sessions[sessionIndex].messages[messageIndex], in: sessionID)
     }
 
     /// Restores the currently selected version after a failed regeneration
@@ -413,27 +450,82 @@ final class SessionStore: ObservableObject {
     // MARK: - Persistence
 
     private func persist() {
+        // SQLite path uses row-level writes (see persistSession/persistMessage);
+        // only the legacy UserDefaults fallback still snapshots everything.
+        guard sqlite == nil else { return }
         guard !persistPaused else { return }
         let snapshot = sessions
-        let database = sqlite
         Self.persistQueue.async {
-            if let database {
-                if database.replaceAll(snapshot) {
-                    UserDefaults.standard.set(true, forKey: Self.migratedFlagKey)
-                }
-            } else {
-                // Legacy fallback only when SQLite could not be opened.
-                guard let data = try? JSONEncoder().encode(snapshot) else { return }
-                let defaults = UserDefaults.standard
-                defaults.set(data, forKey: Self.sessionsKey)
-                defaults.synchronize()
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            let defaults = UserDefaults.standard
+            defaults.set(data, forKey: Self.sessionsKey)
+            defaults.synchronize()
+        }
+    }
+
+    // MARK: - Row-level SQLite writes
+
+    private func persistSession(_ session: ChatSession) {
+        guard let sqlite else { return }
+        let order = sessions.firstIndex(where: { $0.id == session.id }) ?? 0
+        Self.persistQueue.async {
+            sqlite.upsertSession(session, order: order)
+        }
+    }
+
+    private func persistAllSessionMetas() {
+        guard let sqlite else { return }
+        let snapshot = sessions
+        Self.persistQueue.async {
+            for (index, session) in snapshot.enumerated() {
+                sqlite.upsertSession(session, order: index)
             }
         }
+    }
+
+    private func persistMessage(_ message: ChatMessage, in sessionID: UUID) {
+        guard let sqlite,
+              let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let messageIndex = sessions[sessionIndex].messages.firstIndex(where: { $0.id == message.id })
+        else { return }
+        Self.persistQueue.async {
+            sqlite.upsertMessage(message, sessionID: sessionID, order: messageIndex)
+        }
+    }
+
+    private func persistLastAssistant(in sessionID: UUID) {
+        guard let session = sessions.first(where: { $0.id == sessionID }),
+              let message = session.messages.last else { return }
+        persistMessage(message, in: sessionID)
+    }
+
+    private func persistWholeSessionMessages(_ sessionID: UUID) {
+        guard let sqlite,
+              let session = sessions.first(where: { $0.id == sessionID }) else { return }
+        Self.persistQueue.async {
+            sqlite.replaceMessages(sessionID: sessionID, messages: session.messages)
+        }
+    }
+
+    private func deleteMessageRow(_ id: UUID) {
+        guard let sqlite else { return }
+        Self.persistQueue.async { sqlite.deleteMessage(id: id) }
+    }
+
+    private func deleteSessionRow(_ id: UUID) {
+        guard let sqlite else { return }
+        Self.persistQueue.async { sqlite.deleteSession(id: id) }
     }
 
     /// Writes once even if persistence was paused (called when streaming ends).
     func forcePersist() {
         persistPaused = false
-        persist()
+        if let sqlite {
+            Self.persistQueue.async {
+                sqlite.checkpoint()
+            }
+        } else {
+            persist()
+        }
     }
 }

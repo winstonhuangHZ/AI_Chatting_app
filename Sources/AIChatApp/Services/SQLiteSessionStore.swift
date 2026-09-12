@@ -137,6 +137,9 @@ final class SQLiteSessionStore {
                 }
             }
             try exec("COMMIT;")
+            // Keep the WAL from growing to a full second copy of the database
+            // after large imports/migrations.
+            _ = try? exec("PRAGMA wal_checkpoint(PASSIVE);")
             return true
         } catch {
             _ = try? exec("ROLLBACK;")
@@ -153,6 +156,91 @@ final class SQLiteSessionStore {
         guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM sessions;", -1, &statement, nil) == SQLITE_OK,
               sqlite3_step(statement) == SQLITE_ROW else { return true }
         return sqlite3_column_int64(statement, 0) == 0
+    }
+
+    // MARK: - Row-level writes (phase 1.5)
+
+    func upsertSession(_ session: ChatSession, order: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard db != nil,
+              let json = try? JSONEncoder().encode(ChatSessionMeta(session)) else { return }
+        _ = try? insert(
+            "INSERT OR REPLACE INTO sessions(id, json, sort_index) VALUES(?, ?, ?);",
+            texts: [session.id.uuidString, String(decoding: json, as: UTF8.self)],
+            ints: [order]
+        )
+    }
+
+    func upsertMessage(_ message: ChatMessage, sessionID: UUID, order: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard db != nil,
+              let json = try? JSONEncoder().encode(message) else { return }
+        _ = try? insert(
+            "INSERT OR REPLACE INTO messages(id, session_id, json, sort_index) VALUES(?, ?, ?, ?);",
+            texts: [message.id.uuidString, sessionID.uuidString, String(decoding: json, as: UTF8.self)],
+            ints: [order]
+        )
+    }
+
+    func deleteMessage(id: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        _ = try? insert(
+            "DELETE FROM messages WHERE id = ?;",
+            texts: [id.uuidString],
+            ints: []
+        )
+    }
+
+    func deleteSession(id: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard db != nil else { return }
+        _ = try? exec("BEGIN IMMEDIATE;")
+        _ = try? insert("DELETE FROM messages WHERE session_id = ?;", texts: [id.uuidString], ints: [])
+        _ = try? insert("DELETE FROM sessions WHERE id = ?;", texts: [id.uuidString], ints: [])
+        _ = try? exec("COMMIT;")
+    }
+
+    func deleteAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard db != nil else { return }
+        _ = try? exec("BEGIN IMMEDIATE;")
+        _ = try? exec("DELETE FROM messages;")
+        _ = try? exec("DELETE FROM sessions;")
+        _ = try? exec("COMMIT;")
+    }
+
+    func replaceMessages(sessionID: UUID, messages: [ChatMessage]) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard db != nil else { return }
+        _ = try? exec("BEGIN IMMEDIATE;")
+        _ = try? insert(
+            "DELETE FROM messages WHERE session_id = ?;",
+            texts: [sessionID.uuidString],
+            ints: []
+        )
+        for (index, message) in messages.enumerated() {
+            if let json = try? JSONEncoder().encode(message) {
+                _ = try? insert(
+                    "INSERT OR REPLACE INTO messages(id, session_id, json, sort_index) VALUES(?, ?, ?, ?);",
+                    texts: [message.id.uuidString, sessionID.uuidString, String(decoding: json, as: UTF8.self)],
+                    ints: [index]
+                )
+            }
+        }
+        _ = try? exec("COMMIT;")
+    }
+
+    /// Merge the WAL back into the main database file.
+    func checkpoint() {
+        lock.lock()
+        defer { lock.unlock() }
+        _ = try? exec("PRAGMA wal_checkpoint(TRUNCATE);")
     }
 
     // MARK: - Helpers
