@@ -252,25 +252,32 @@ enum ChatTools {
         description: """
         List the sessions in a folder that has shared context enabled. Returns each \
         session's title, timestamp, message count and summary status. Use this before \
-        get_folder_summaries when you need cross-conversation context.
+        get_folder_summaries when you need cross-conversation context. Omit `folder` to \
+        use the current conversation's own folder; do not read other folders unless the \
+        user explicitly names them.
         """,
         parameters: [
             "type": "object",
             "properties": [
-                "folder": ["type": "string", "description": "文件夹名称"],
+                "folder": ["type": "string", "description": "文件夹名称；省略时默认使用当前对话所在文件夹"],
             ],
-            "required": ["folder"],
         ]
-    ) { arguments, _ in
-        let folder = (arguments["folder"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !folder.isEmpty else { return "Error: missing \"folder\" argument." }
+    ) { arguments, sessionID in
+        var folder = (arguments["folder"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if folder.isEmpty {
+            folder = await MainActor.run { ChatTools.sessionFolderName?(sessionID) ?? "" }
+        }
+        guard !folder.isEmpty else {
+            return "This conversation is not in a folder yet, so there is no shared context to list."
+        }
+        let resolvedFolder = folder
         let rows = await MainActor.run {
-            ChatTools.folderSessionIndexResolver?(folder) ?? []
+            ChatTools.folderSessionIndexResolver?(resolvedFolder) ?? []
         }
         guard !rows.isEmpty else {
             return "No shared sessions found for folder \"\(folder)\". The folder may not exist or folder sharing is disabled."
         }
-        return Self.jsonText(rows)
+        return "Current folder: \(folder)\nShared context: enabled\n" + Self.jsonText(rows)
     }
 
     /// Returns stored summaries for the requested sessions of a shared folder.
@@ -279,25 +286,29 @@ enum ChatTools {
         description: """
         Retrieve stored summaries for specific sessions in a folder with shared \
         context enabled. Pass session titles (as returned by list_folder_sessions). \
-        Summaries are background context and may be stale — verify before relying on them.
+        Omit `folder` to use the current conversation's own folder. Summaries are \
+        background context and may be stale — verify before relying on them.
         """,
         parameters: [
             "type": "object",
             "properties": [
-                "folder": ["type": "string", "description": "文件夹名称"],
+                "folder": ["type": "string", "description": "文件夹名称；省略时默认使用当前对话所在文件夹"],
                 "sessions": [
                     "type": "array",
                     "description": "要读取摘要的会话标题（1-3 个）",
                     "items": ["type": "string"],
                 ],
             ],
-            "required": ["folder", "sessions"],
+            "required": ["sessions"],
         ]
-    ) { arguments, _ in
-        let folder = (arguments["folder"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    ) { arguments, sessionID in
+        var folder = (arguments["folder"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if folder.isEmpty {
+            folder = await MainActor.run { ChatTools.sessionFolderName?(sessionID) ?? "" }
+        }
         let sessions = arguments["sessions"] as? [String] ?? []
         guard !folder.isEmpty, !sessions.isEmpty else {
-            return "Error: \"folder\" and \"sessions\" are required."
+            return "This conversation is not in a shared folder (or no sessions were requested)."
         }
         let rows = await ChatTools.folderSummariesAsyncResolver?(folder, sessions) ?? []
         guard !rows.isEmpty else {
