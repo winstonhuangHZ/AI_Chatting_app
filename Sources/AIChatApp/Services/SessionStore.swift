@@ -13,6 +13,10 @@ final class SessionStore: ObservableObject {
     /// `UserDefaults` key recording the selected session UUID string.
     private static let activeIDKey = "activeSessionID"
 
+    /// Set after the legacy UserDefaults payload has been migrated, so that
+    /// deleting all chats later does not re-import the stale legacy copy.
+    private static let migratedFlagKey = "chatSessions.sqliteMigrated.v1"
+
     /// Serial queue for the expensive full-history JSON encode + UserDefaults
     /// flush. Encoding 40+ MB of sessions synchronously on the main thread was
     /// the source of UI freezes on every message append/delete; snapshots are
@@ -21,6 +25,9 @@ final class SessionStore: ObservableObject {
         label: "com.aichat.app.session-persist",
         qos: .utility
     )
+
+    /// Phase-1 SQLite backend (nil ⇒ legacy UserDefaults fallback).
+    private let sqlite: SQLiteSessionStore?
 
     // MARK: - Published state
 
@@ -53,12 +60,33 @@ final class SessionStore: ObservableObject {
     // MARK: - Initializers
 
     init() {
+        let database = try? SQLiteSessionStore(url: SQLiteSessionStore.defaultURL())
+        self.sqlite = database
+
         let defaults = UserDefaults.standard
 
-        if let data = defaults.data(forKey: Self.sessionsKey),
-           let decoded = try? JSONDecoder().decode([ChatSession].self, from: data) {
-            // Sort newest first by creation date.
-            self.sessions = decoded.sorted { $0.createdAt > $1.createdAt }
+        let databaseSessions = database?.loadAll() ?? []
+        if !databaseSessions.isEmpty {
+            self.sessions = databaseSessions
+            defaults.set(true, forKey: Self.migratedFlagKey)
+        } else if database != nil,
+                  defaults.bool(forKey: Self.migratedFlagKey) {
+            // Migrated before; an empty database means the user deleted all
+            // conversations, so do not resurrect the legacy copy.
+            self.sessions = []
+        } else if let data = defaults.data(forKey: Self.sessionsKey),
+                  let decoded = try? JSONDecoder().decode([ChatSession].self, from: data) {
+            // First launch on 1.2.0: keep the legacy payload untouched as a
+            // rollback copy and migrate it into SQLite in the background.
+            let sorted = decoded.sorted { $0.createdAt > $1.createdAt }
+            self.sessions = sorted
+            if let database {
+                Self.persistQueue.async {
+                    if database.replaceAll(sorted) {
+                        UserDefaults.standard.set(true, forKey: Self.migratedFlagKey)
+                    }
+                }
+            }
         } else {
             self.sessions = []
         }
@@ -387,11 +415,19 @@ final class SessionStore: ObservableObject {
     private func persist() {
         guard !persistPaused else { return }
         let snapshot = sessions
+        let database = sqlite
         Self.persistQueue.async {
-            guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            let defaults = UserDefaults.standard
-            defaults.set(data, forKey: Self.sessionsKey)
-            defaults.synchronize()
+            if let database {
+                if database.replaceAll(snapshot) {
+                    UserDefaults.standard.set(true, forKey: Self.migratedFlagKey)
+                }
+            } else {
+                // Legacy fallback only when SQLite could not be opened.
+                guard let data = try? JSONEncoder().encode(snapshot) else { return }
+                let defaults = UserDefaults.standard
+                defaults.set(data, forKey: Self.sessionsKey)
+                defaults.synchronize()
+            }
         }
     }
 
