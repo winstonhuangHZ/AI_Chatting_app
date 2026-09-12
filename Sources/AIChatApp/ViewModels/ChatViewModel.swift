@@ -101,6 +101,9 @@ final class ChatViewModel: ObservableObject {
     /// Sessions currently being summarized (side-channel, no main history).
     @Published var summaryGenerating: Set<UUID> = []
 
+    /// In-flight summarization tasks (deduped per session).
+    private var summaryTasks: [UUID: Task<SessionSummary?, Never>] = [:]
+
     /// The selected session id (single source of truth; sidebar reads this).
     @Published var activeSessionID: UUID?
 
@@ -413,62 +416,114 @@ final class ChatViewModel: ObservableObject {
         sessionStore.summary(for: session.id)
     }
 
-    /// Generates a per-session summary with a dedicated non-agent request.
-    /// The exchange is NOT appended to the session history; only the summary
-    /// is stored, so the main conversation's prefix cache stays intact.
+    /// Manual trigger from the right-click menu.
     func generateSessionSummary(for session: ChatSession) {
-        guard !summaryGenerating.contains(session.id),
-              let config = configStore.activeConfig else { return }
+        Task { _ = await generateSummaryTask(for: session) }
+    }
 
+    /// Async resolver used by `get_folder_summaries`. Missing or stale
+    /// summaries are generated on demand (capped at 3 sessions per call).
+    func folderSummariesAsync(folderName: String, titles: [String]) async -> [[String: Any]] {
+        guard let folder = folderStore.folders.first(where: {
+            $0.name.caseInsensitiveCompare(folderName) == .orderedSame
+        }), folder.sharedContextEnabled == true else {
+            return []
+        }
+        let wanted = Array(titles.prefix(3))
+        let targets = sessionStore.sessions.filter {
+            $0.folderID == folder.id && wanted.contains($0.title)
+        }
+        let formatter = ISO8601DateFormatter()
+        var rows: [[String: Any]] = []
+        for session in targets {
+            guard let summary = await summaryForTool(session) else { continue }
+            rows.append([
+                "session_id": session.id.uuidString,
+                "title": session.title,
+                "updated_at": formatter.string(from: session.createdAt),
+                "summary_updated_at": formatter.string(from: summary.updatedAt),
+                "summary": summary.summary,
+                "status": summary.status.rawValue,
+            ])
+        }
+        return rows
+    }
+
+    private func summaryForTool(_ session: ChatSession) async -> SessionSummary? {
+        if let existing = sessionStore.summary(for: session.id),
+           existing.status == .fresh,
+           existing.coveredMessageCount == session.messageCount {
+            return existing
+        }
+        return await generateSummaryTask(for: session)
+    }
+
+    /// Deduplicates concurrent summarization requests per session.
+    private func generateSummaryTask(for session: ChatSession) async -> SessionSummary? {
+        if let task = summaryTasks[session.id] { return await task.value }
+        let task = Task<SessionSummary?, Never> { [weak self] in
+            guard let self else { return nil }
+            return await self.makeSummary(for: session)
+        }
+        summaryTasks[session.id] = task
+        let result = await task.value
+        summaryTasks[session.id] = nil
+        return result
+    }
+
+    /// Side-channel summarizer request. Never appended to session history.
+    private func makeSummary(for session: ChatSession) async -> SessionSummary? {
+        guard let config = configStore.activeConfig else { return nil }
         sessionStore.loadMessagesIfNeeded(session.id)
-        guard let loaded = sessionStore.sessions.first(where: { $0.id == session.id }) else { return }
+        guard let loaded = sessionStore.sessions.first(where: { $0.id == session.id }) else { return nil }
         let messages = loaded.messages.filter {
             ($0.role == .user || $0.role == .assistant)
                 && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        guard !messages.isEmpty else { return }
+        guard !messages.isEmpty else { return nil }
 
         summaryGenerating.insert(session.id)
+        defer { summaryGenerating.remove(session.id) }
+
         let transcript = messages.map { message in
             "\(message.role == .user ? "User" : "Assistant"): \(message.content)"
         }.joined(separator: "\n\n")
-        let lastMessageID = messages.last?.id
 
-        Task { @MainActor in
-            defer { summaryGenerating.remove(session.id) }
-            do {
-                let history: [ChatMessage] = [
-                    .system("""
-                    You are a conversation summarizer. Produce a concise, factual summary of \
-                    the dialogue below. Keep decisions, conclusions, open questions and durable \
-                    facts. Output only the summary text — no preamble, no headings.
-                    """),
-                    .user(transcript),
-                ]
-                let stream = try await service.streamChat(
-                    config: config,
-                    model: config.selectedModel,
-                    messages: history
-                )
-                var accumulated = ""
-                for try await delta in stream { accumulated += delta }
-                let text = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else {
-                    errorMessage = L("summary.failed")
-                    return
-                }
-                sessionStore.saveSummary(SessionSummary(
-                    sessionID: session.id,
-                    summary: text,
-                    updatedAt: Date(),
-                    coveredLastMessageID: lastMessageID,
-                    coveredMessageCount: messages.count,
-                    model: config.selectedModel,
-                    status: .fresh
-                ))
-            } catch {
-                errorMessage = L("summary.failed") + " — \(error.localizedDescription)"
+        do {
+            let history: [ChatMessage] = [
+                .system("""
+                You are a conversation summarizer. Produce a concise, factual summary of \
+                the dialogue below. Keep decisions, conclusions, open questions and durable \
+                facts. Output only the summary text — no preamble, no headings.
+                """),
+                .user(transcript),
+            ]
+            let stream = try await service.streamChat(
+                config: config,
+                model: config.selectedModel,
+                messages: history
+            )
+            var accumulated = ""
+            for try await delta in stream { accumulated += delta }
+            let text = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else {
+                errorMessage = L("summary.failed")
+                return nil
             }
+            let summary = SessionSummary(
+                sessionID: session.id,
+                summary: text,
+                updatedAt: Date(),
+                coveredLastMessageID: messages.last?.id,
+                coveredMessageCount: messages.count,
+                model: config.selectedModel,
+                status: .fresh
+            )
+            sessionStore.saveSummary(summary)
+            return summary
+        } catch {
+            errorMessage = L("summary.failed") + " — \(error.localizedDescription)"
+            return nil
         }
     }
 
@@ -600,6 +655,10 @@ final class ChatViewModel: ObservableObject {
                         "status": summary.status.rawValue,
                     ]
                 }
+        }
+        ChatTools.folderSummariesAsyncResolver = { [weak self] folderName, titles in
+            guard let self else { return [] }
+            return await self.folderSummariesAsync(folderName: folderName, titles: titles)
         }
 
         // Mirror store changes into this VM (one-way: store → VM).

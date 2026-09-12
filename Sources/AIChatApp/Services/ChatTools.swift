@@ -90,6 +90,7 @@ enum ChatTools {
     /// explicitly enabled sharing).
     @MainActor static var folderSessionIndexResolver: ((String) -> [[String: Any]])?
     @MainActor static var folderSummariesResolver: ((String, [String]) -> [[String: Any]])?
+    @MainActor static var folderSummariesAsyncResolver: ((String, [String]) async -> [[String: Any]])?
 
     /// The base tool set sent on every agent-mode (tool-enabled) request.
     ///
@@ -298,9 +299,7 @@ enum ChatTools {
         guard !folder.isEmpty, !sessions.isEmpty else {
             return "Error: \"folder\" and \"sessions\" are required."
         }
-        let rows = await MainActor.run {
-            ChatTools.folderSummariesResolver?(folder, sessions) ?? []
-        }
+        let rows = await ChatTools.folderSummariesAsyncResolver?(folder, sessions) ?? []
         guard !rows.isEmpty else {
             return "No summaries available for the requested sessions in \"\(folder)\"."
         }
