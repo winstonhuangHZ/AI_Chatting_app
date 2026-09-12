@@ -83,6 +83,9 @@ enum ChatTools {
     /// Assigns (or creates) a folder for the originating session.
     @MainActor static var folderAssigner: ((UUID?, String) -> Void)?
 
+    /// Returns the originating session's current folder name, if any.
+    @MainActor static var sessionFolderName: ((UUID?) -> String?)?
+
     /// The base tool set sent on every agent-mode (tool-enabled) request.
     ///
     /// `set_session_metadata` / `fetch_personalization_block` 常驻注册表（保证
@@ -127,49 +130,16 @@ enum ChatTools {
         includeKnowledge: Bool = false,
         includeFolders: Bool = false
     ) -> [BuiltinTool] {
-        var tools = all.filter {
-            ($0.name != "set_session_metadata" || includeSessionMetadata)
-                && ($0.name != "fetch_personalization_block" || includeKnowledge)
-                && ($0.name != "list_session_folders" || includeFolders)
-                && ($0.name != "assign_session_folder" || includeFolders)
-        }
+        // IMPORTANT (DeepSeek prefix cache): the tool set must be byte-stable
+        // for the whole conversation. Conditionally adding/removing tools
+        // between turns invalidates the cached prefix and drops the hit rate
+        // to just the system prompt. Behavioral limits are enforced at
+        // execution time instead (see sessionMetadataSink / folderAssigner).
+        var tools = all
         if latexEnabled && LaTeXService.isAvailable {
             tools.append(compileLaTeX)
         }
         return tools
-    }
-
-    /// Rebuilds the folder-assignment tool with the live folder list injected
-    /// into its description, so the model can choose an existing folder without
-    /// an extra `list_session_folders` round-trip.
-    static func withFolderContext(
-        _ tools: [BuiltinTool],
-        names: [String],
-        currentFolder: String?
-    ) -> [BuiltinTool] {
-        tools.map { tool in
-            guard tool.name == "assign_session_folder" else { return tool }
-            let existing = names.isEmpty ? "none yet" : names.joined(separator: ", ")
-            let current = currentFolder ?? "Uncategorized"
-            let description = """
-            File the current conversation into a sidebar folder.
-            Existing folders: \(existing)
-            Current folder: \(current)
-            Only use this when Current folder is "Uncategorized". NEVER move a conversation \
-            that already has a folder — reclassification is the user's job. A single passing \
-            remark, example, or tangentially related message is NOT a topic change; only call \
-            this when the conversation's main subject is consistently clear. Prefer an exact \
-            existing folder name; otherwise choose a short new folder name (≤16 characters, \
-            in the user's language) and the app will create it.
-            """
-            return BuiltinTool(
-                name: tool.name,
-                description: description,
-                parameters: tool.parameters,
-                extractSources: tool.extractSources,
-                execute: tool.execute
-            )
-        }
     }
 
     // MARK: - set_session_metadata
@@ -218,11 +188,13 @@ enum ChatTools {
             "type": "object",
             "properties": [:],
         ]
-    ) { _, _ in
+    ) { _, sessionID in
         let names = await MainActor.run { ChatTools.folderNames?() ?? [] }
-        return names.isEmpty
-            ? "No folders exist yet."
-            : "Existing folders: " + names.joined(separator: ", ")
+        let current = await MainActor.run {
+            ChatTools.sessionFolderName?(sessionID) ?? "Uncategorized"
+        }
+        let list = names.isEmpty ? "No folders exist yet." : "Existing folders: " + names.joined(separator: ", ")
+        return list + "\nCurrent folder: " + current
     }
 
     /// Lets the model file this conversation into one of the user's sidebar

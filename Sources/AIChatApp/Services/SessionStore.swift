@@ -181,7 +181,9 @@ final class SessionStore: ObservableObject {
         if let emoji, !emoji.isEmpty {
             sessions[index].emoji = emoji
         }
-        if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let title,
+           !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !sessions[index].hasModelTitle {
             sessions[index].title = title
             sessions[index].hasModelTitle = true
         }

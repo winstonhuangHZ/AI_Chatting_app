@@ -436,6 +436,13 @@ final class ChatViewModel: ObservableObject {
             }
             self.sessionStore.move(sessionID: targetSessionID, to: folder.id)
         }
+        ChatTools.sessionFolderName = { [weak self] sessionID in
+            guard let self,
+                  let targetSessionID = sessionID ?? self.activeSessionID,
+                  let folderID = self.sessions.first(where: { $0.id == targetSessionID })?.folderID
+            else { return nil }
+            return self.folderStore.folders.first(where: { $0.id == folderID })?.name
+        }
 
         // Mirror store changes into this VM (one-way: store → VM).
         sessionStore.$sessions.sink { [weak self] newSessions in
@@ -840,15 +847,16 @@ final class ChatViewModel: ObservableObject {
         includeMetadata: Bool,
         includeFolders: Bool
     ) -> [BuiltinTool] {
-        var tools: [BuiltinTool] = [ChatTools.getTime]
-        if includeMetadata {
-            tools.append(ChatTools.setSessionMetadata)
-        }
-        if includeFolders {
-            tools.append(ChatTools.listSessionFolders)
-            tools.append(ChatTools.assignSessionFolder)
-        }
-        return tools
+        // Stable set for the whole conversation (DeepSeek prefix cache).
+        _ = includeMetadata
+        _ = includeFolders
+        return [
+            ChatTools.getTime,
+            ChatTools.setSessionMetadata,
+            ChatTools.fetchPersonalizationBlock,
+            ChatTools.listSessionFolders,
+            ChatTools.assignSessionFolder,
+        ]
     }
 
     /// Starts a generation request (streaming or non-streaming) and wires it to
@@ -929,7 +937,10 @@ final class ChatViewModel: ObservableObject {
                     let targetSession = self.sessions.first(where: { $0.id == sessionID })
                     let titleStillNeedsModel = targetSession?.hasModelTitle == false
                         && targetSession?.isPersonalizationCollection != true
-                    var toolSet: [BuiltinTool]? = configForRequest.toolsEnabled
+                    // The tool set must stay byte-identical for the whole
+                    // conversation; behavioral limits (title once, no
+                    // reclassification) are enforced in the executors.
+                    let toolSet: [BuiltinTool]? = configForRequest.toolsEnabled
                         ? ChatTools.set(
                             latexEnabled: configForRequest.latexEnabled,
                             includeSessionMetadata: titleStillNeedsModel,
@@ -940,16 +951,6 @@ final class ChatViewModel: ObservableObject {
                             includeMetadata: titleStillNeedsModel,
                             includeFolders: targetSession?.folderID == nil
                         )
-                    let currentFolderName = targetSession?.folderID.flatMap { folderID in
-                        self.folderStore.folders.first(where: { $0.id == folderID })?.name
-                    }
-                    if let base = toolSet {
-                        toolSet = ChatTools.withFolderContext(
-                            base,
-                            names: self.folderStore.names(),
-                            currentFolder: currentFolderName
-                        )
-                    }
                     let stream = try await service.streamChatWithTools(
                         config: configForRequest,
                         model: modelForRequest,
