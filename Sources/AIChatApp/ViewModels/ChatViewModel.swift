@@ -1377,11 +1377,21 @@ final class ChatViewModel: ObservableObject {
         }
 
         let sessionSnapshot = sessions
+        let ftsHits = sessionStore.searchMessageIDs(query: query)
         searchTask = Task.detached(priority: .userInitiated) {
-            let results = Self.buildSearchResults(
-                query: query,
-                sessions: sessionSnapshot
-            )
+            let results: [MessageSearchResult]
+            if let ftsHits {
+                results = Self.buildSearchResults(
+                    query: query,
+                    sessions: sessionSnapshot,
+                    hits: ftsHits
+                )
+            } else {
+                results = Self.buildSearchResults(
+                    query: query,
+                    sessions: sessionSnapshot
+                )
+            }
             await MainActor.run {
                 guard generation == self.searchGeneration else { return }
                 self.searchResults = results
@@ -1411,6 +1421,31 @@ final class ChatViewModel: ObservableObject {
             }
         }
         return results
+    }
+
+    /// FTS path: hits are already relevance-ordered, so only materialise the
+    /// matching messages (no full-history scan).
+    nonisolated private static func buildSearchResults(
+        query: String,
+        sessions: [ChatSession],
+        hits: [(messageID: UUID, sessionID: UUID)]
+    ) -> [MessageSearchResult] {
+        var index: [UUID: (sessionTitle: String, sessionID: UUID, message: ChatMessage)] = [:]
+        for session in sessions {
+            for message in session.messages where message.role == .user || message.role == .assistant {
+                index[message.id] = (session.title, session.id, message)
+            }
+        }
+        return hits.compactMap { hit in
+            guard let entry = index[hit.messageID] else { return nil }
+            return MessageSearchResult(
+                id: entry.message.id,
+                sessionID: entry.sessionID,
+                sessionTitle: entry.sessionTitle,
+                message: entry.message,
+                snippet: Self.searchSnippet(for: entry.message.content, query: query)
+            )
+        }
     }
 
     /// Jumps to the message containing a search hit and highlights it briefly.

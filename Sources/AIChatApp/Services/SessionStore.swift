@@ -17,6 +17,9 @@ final class SessionStore: ObservableObject {
     /// deleting all chats later does not re-import the stale legacy copy.
     private static let migratedFlagKey = "chatSessions.sqliteMigrated.v1"
 
+    /// Set after the FTS index has been built and the database vacuumed once.
+    private static let ftsIndexedFlagKey = "chatSessions.ftsIndexed.v1"
+
     /// Serial queue for the expensive full-history JSON encode + UserDefaults
     /// flush. Encoding 40+ MB of sessions synchronously on the main thread was
     /// the source of UI freezes on every message append/delete; snapshots are
@@ -28,6 +31,9 @@ final class SessionStore: ObservableObject {
 
     /// Phase-1 SQLite backend (nil ⇒ legacy UserDefaults fallback).
     private let sqlite: SQLiteSessionStore?
+
+    /// True once the FTS index has been built (search falls back until then).
+    private(set) var ftsReady = false
 
     // MARK: - Published state
 
@@ -151,6 +157,22 @@ final class SessionStore: ObservableObject {
                                 UserDefaults.standard.set(true, forKey: Self.migratedFlagKey)
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // Phase 2.3: build the FTS index once (and reclaim free pages), then
+        // search can query the database instead of scanning every message.
+        if let database {
+            if defaults.bool(forKey: Self.ftsIndexedFlagKey) {
+                ftsReady = true
+            } else {
+                Self.persistQueue.async {
+                    database.rebuildIndexAndCompact()
+                    DispatchQueue.main.async {
+                        UserDefaults.standard.set(true, forKey: Self.ftsIndexedFlagKey)
+                        self.ftsReady = true
                     }
                 }
             }
@@ -597,6 +619,14 @@ final class SessionStore: ObservableObject {
     }
 
     // MARK: - Attachment externalization
+
+    /// FTS-backed search. Nil means the index is not ready (or unavailable) and
+    /// the caller should fall back to the in-memory scan.
+    func searchMessageIDs(query: String, limit: Int = 200) -> [(messageID: UUID, sessionID: UUID)]? {
+        guard ftsReady, let sqlite else { return nil }
+        guard let hits = sqlite.searchMessageIDs(query: query, limit: limit) else { return nil }
+        return hits.map { (messageID: $0.0, sessionID: $0.1) }
+    }
 
     private static func externalizingAttachments(
         in sessions: [ChatSession]

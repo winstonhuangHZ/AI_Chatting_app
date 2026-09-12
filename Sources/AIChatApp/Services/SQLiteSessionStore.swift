@@ -16,6 +16,7 @@ final class SQLiteSessionStore {
 
     private var db: OpaquePointer?
     private let lock = NSLock()
+    private(set) var ftsEnabled = false
 
     /// `~/Library/Application Support/AIChatApp/aichat.sqlite`
     static func defaultURL() throws -> URL {
@@ -56,6 +57,21 @@ final class SQLiteSessionStore {
         CREATE INDEX IF NOT EXISTS idx_messages_session
             ON messages(session_id, sort_index);
         """)
+        // Trigram tokenizer keeps the previous substring-search semantics for
+        // both Latin and CJK text.
+        do {
+            try exec("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                content,
+                message_id UNINDEXED,
+                session_id UNINDEXED,
+                tokenize = 'trigram'
+            );
+            """)
+            ftsEnabled = true
+        } catch {
+            ftsEnabled = false
+        }
     }
 
     deinit {
@@ -118,6 +134,7 @@ final class SQLiteSessionStore {
             try exec("BEGIN IMMEDIATE;")
             try exec("DELETE FROM messages;")
             try exec("DELETE FROM sessions;")
+            if ftsEnabled { try exec("DELETE FROM messages_fts;") }
             for (sessionIndex, session) in sessions.enumerated() {
                 let meta = ChatSessionMeta(session)
                 let json = try JSONEncoder().encode(meta)
@@ -134,6 +151,13 @@ final class SQLiteSessionStore {
                         texts: [message.id.uuidString, session.id.uuidString, String(decoding: messageJSON, as: UTF8.self)],
                         ints: [messageIndex]
                     )
+                    if ftsEnabled {
+                        try insert(
+                            "INSERT INTO messages_fts(content, message_id, session_id) VALUES(?, ?, ?);",
+                            texts: [message.content, message.id.uuidString, session.id.uuidString],
+                            ints: []
+                        )
+                    }
                 }
             }
             try exec("COMMIT;")
@@ -182,6 +206,7 @@ final class SQLiteSessionStore {
             texts: [message.id.uuidString, sessionID.uuidString, String(decoding: json, as: UTF8.self)],
             ints: [order]
         )
+        indexMessage(id: message.id, sessionID: sessionID, content: message.content)
     }
 
     func deleteMessage(id: UUID) {
@@ -192,6 +217,13 @@ final class SQLiteSessionStore {
             texts: [id.uuidString],
             ints: []
         )
+        if ftsEnabled {
+            _ = try? insert(
+                "DELETE FROM messages_fts WHERE message_id = ?;",
+                texts: [id.uuidString],
+                ints: []
+            )
+        }
     }
 
     func deleteSession(id: UUID) {
@@ -201,6 +233,9 @@ final class SQLiteSessionStore {
         _ = try? exec("BEGIN IMMEDIATE;")
         _ = try? insert("DELETE FROM messages WHERE session_id = ?;", texts: [id.uuidString], ints: [])
         _ = try? insert("DELETE FROM sessions WHERE id = ?;", texts: [id.uuidString], ints: [])
+        if ftsEnabled {
+            _ = try? insert("DELETE FROM messages_fts WHERE session_id = ?;", texts: [id.uuidString], ints: [])
+        }
         _ = try? exec("COMMIT;")
     }
 
@@ -211,6 +246,7 @@ final class SQLiteSessionStore {
         _ = try? exec("BEGIN IMMEDIATE;")
         _ = try? exec("DELETE FROM messages;")
         _ = try? exec("DELETE FROM sessions;")
+        if ftsEnabled { _ = try? exec("DELETE FROM messages_fts;") }
         _ = try? exec("COMMIT;")
     }
 
@@ -224,6 +260,9 @@ final class SQLiteSessionStore {
             texts: [sessionID.uuidString],
             ints: []
         )
+        if ftsEnabled {
+            _ = try? insert("DELETE FROM messages_fts WHERE session_id = ?;", texts: [sessionID.uuidString], ints: [])
+        }
         for (index, message) in messages.enumerated() {
             if let json = try? JSONEncoder().encode(message) {
                 _ = try? insert(
@@ -231,6 +270,7 @@ final class SQLiteSessionStore {
                     texts: [message.id.uuidString, sessionID.uuidString, String(decoding: json, as: UTF8.self)],
                     ints: [index]
                 )
+                indexMessage(id: message.id, sessionID: sessionID, content: message.content)
             }
         }
         _ = try? exec("COMMIT;")
@@ -241,6 +281,92 @@ final class SQLiteSessionStore {
         lock.lock()
         defer { lock.unlock() }
         _ = try? exec("PRAGMA wal_checkpoint(TRUNCATE);")
+    }
+
+    // MARK: - Full-text search
+
+    /// Returns matching (messageID, sessionID) pairs ordered by relevance.
+    /// Nil means FTS is unavailable and the caller should fall back.
+    func searchMessageIDs(query: String, limit: Int) -> [(UUID, UUID)]? {
+        guard ftsEnabled else { return nil }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 3 else { return nil }
+        let escaped = trimmed.replacingOccurrences(of: "\"", with: "\"\"")
+
+        lock.lock()
+        defer { lock.unlock() }
+        guard let db else { return nil }
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(
+            db,
+            "SELECT message_id, session_id FROM messages_fts WHERE messages_fts MATCH ? ORDER BY bm25(messages_fts) LIMIT ?;",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK else { return nil }
+        sqlite3_bind_text(statement, 1, ("\"\(escaped)\"" as NSString).utf8String, -1, Self.transient)
+        sqlite3_bind_int64(statement, 2, Int64(limit))
+
+        var hits: [(UUID, UUID)] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let idText = sqlite3_column_text(statement, 0),
+                  let sessionText = sqlite3_column_text(statement, 1),
+                  let messageID = UUID(uuidString: String(cString: idText)),
+                  let sessionID = UUID(uuidString: String(cString: sessionText)) else { continue }
+            hits.append((messageID, sessionID))
+        }
+        return hits
+    }
+
+    /// Rebuilds the FTS index from the message rows and reclaims free pages.
+    func rebuildIndexAndCompact() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard db != nil, ftsEnabled else { return }
+        _ = try? exec("BEGIN IMMEDIATE;")
+        _ = try? exec("DELETE FROM messages_fts;")
+        var statement: OpaquePointer?
+        if sqlite3_prepare_v2(db, "SELECT id, session_id, json FROM messages;", -1, &statement, nil) == SQLITE_OK {
+            var rows: [(String, String, String)] = []
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let idText = sqlite3_column_text(statement, 0),
+                      let sessionText = sqlite3_column_text(statement, 1),
+                      let jsonText = sqlite3_column_text(statement, 2) else { continue }
+                rows.append((String(cString: idText), String(cString: sessionText), String(cString: jsonText)))
+            }
+            sqlite3_finalize(statement)
+            for (id, sessionID, json) in rows {
+                guard let data = json.data(using: .utf8),
+                      let message = try? JSONDecoder().decode(ChatMessage.self, from: data) else { continue }
+                if ftsEnabled {
+                    _ = try? insert(
+                        "INSERT INTO messages_fts(content, message_id, session_id) VALUES(?, ?, ?);",
+                        texts: [message.content, id, sessionID],
+                        ints: []
+                    )
+                }
+            }
+        } else {
+            sqlite3_finalize(statement)
+        }
+        _ = try? exec("COMMIT;")
+        _ = try? exec("PRAGMA wal_checkpoint(TRUNCATE);")
+        _ = try? exec("VACUUM;")
+    }
+
+    private func indexMessage(id: UUID, sessionID: UUID, content: String) {
+        guard ftsEnabled else { return }
+        _ = try? insert(
+            "DELETE FROM messages_fts WHERE message_id = ?;",
+            texts: [id.uuidString],
+            ints: []
+        )
+        _ = try? insert(
+            "INSERT INTO messages_fts(content, message_id, session_id) VALUES(?, ?, ?);",
+            texts: [content, id.uuidString, sessionID.uuidString],
+            ints: []
+        )
     }
 
     // MARK: - Helpers
