@@ -43,6 +43,11 @@ final class FolderStore: ObservableObject {
         folders.removeAll { $0.id == folder.id }
     }
 
+    func setSharedContext(_ enabled: Bool, for folder: ChatFolder) {
+        guard let index = folders.firstIndex(where: { $0.id == folder.id }) else { return }
+        folders[index].sharedContextEnabled = enabled
+    }
+
     func replaceAll(with new: [ChatFolder]) {
         folders = new
     }

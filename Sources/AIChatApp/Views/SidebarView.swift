@@ -24,6 +24,9 @@ struct SidebarView: View {
     /// 文件夹新建/重命名弹窗状态。
     @State private var folderEditorTarget: FolderEditorTarget?
 
+    /// 正在查看摘要的会话。
+    @State private var summaryTarget: ChatSession?
+
     /// 搜索框输入（防抖后写入 ViewModel，避免每次按键全量扫历史）。
     @State private var searchText = ""
 
@@ -49,6 +52,12 @@ struct SidebarView: View {
         }
         .sheet(item: $folderEditorTarget) { target in
             FolderEditorSheet(target: target)
+                .environmentObject(chatViewModel)
+                .environmentObject(appearance)
+                .environmentObject(localization)
+        }
+        .sheet(item: $summaryTarget) { session in
+            SessionSummarySheet(session: session)
                 .environmentObject(chatViewModel)
                 .environmentObject(appearance)
                 .environmentObject(localization)
@@ -278,6 +287,18 @@ struct SidebarView: View {
         Label(folder.name, systemImage: "folder")
             .font(appearance.fontPreset.font(size: appearance.pointSize - 1))
             .contextMenu {
+                let shared = folder.sharedContextEnabled == true
+                Button {
+                    chatViewModel.setFolderSharedContext(folder, enabled: !shared)
+                } label: {
+                    Label(
+                        L(shared ? "folder.share.disable" : "folder.share.enable"),
+                        systemImage: shared ? "eye.slash" : "eye"
+                    )
+                }
+
+                Divider()
+
                 Button {
                     folderEditorTarget = .rename(folder)
                 } label: {
@@ -310,6 +331,24 @@ struct SidebarView: View {
                 sessionToEdit = session
             } label: {
                 Label(L("session.rename"), systemImage: "pencil")
+            }
+
+            Divider()
+
+            Button {
+                chatViewModel.generateSessionSummary(for: session)
+            } label: {
+                Label(L("summary.generate"), systemImage: "text.badge.plus")
+            }
+            .disabled(session.messageCount == 0
+                      || chatViewModel.summaryGenerating.contains(session.id))
+
+            if chatViewModel.summary(for: session) != nil {
+                Button {
+                    summaryTarget = session
+                } label: {
+                    Label(L("summary.view"), systemImage: "doc.text.magnifyingglass")
+                }
             }
 
             if !chatViewModel.folders.isEmpty {
@@ -597,6 +636,89 @@ private extension FolderEditorTarget {
     var isNew: Bool {
         if case .create = self { return true }
         return false
+    }
+}
+
+/// Sheet that shows a session's generated summary.
+private struct SessionSummarySheet: View {
+    let session: ChatSession
+
+    @EnvironmentObject private var chatViewModel: ChatViewModel
+    @EnvironmentObject private var appearance: AppearanceStore
+    @EnvironmentObject private var localization: LocalizationManager
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Label(L("summary.title"), systemImage: "doc.text")
+                    .font(.headline)
+                Spacer()
+                if chatViewModel.summaryGenerating.contains(session.id) {
+                    ProgressView().controlSize(.small)
+                }
+            }
+
+            if let summary = chatViewModel.summary(for: session) {
+                HStack(spacing: 8) {
+                    Text(session.title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if summary.status == .stale {
+                        Label(L("summary.stale"), systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                    Spacer()
+                    Text(summary.updatedAt.formatted(date: .numeric, time: .shortened))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+
+                ScrollView {
+                    Text(summary.summary)
+                        .font(appearance.fontPreset.font(size: appearance.pointSize))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(minHeight: 160, maxHeight: 340)
+
+                HStack {
+                    Button(L("summary.copy")) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(summary.summary, forType: .string)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button(L("summary.refresh")) {
+                        chatViewModel.generateSessionSummary(for: session)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(chatViewModel.summaryGenerating.contains(session.id))
+
+                    Spacer()
+                    Button(L("close")) { dismiss() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(appearance.prominentButtonColor)
+                }
+            } else {
+                Text(L("summary.empty"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Spacer()
+                    Button(L("summary.generate")) {
+                        chatViewModel.generateSessionSummary(for: session)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(appearance.prominentButtonColor)
+                    Button(L("close")) { dismiss() }
+                        .buttonStyle(.bordered)
+                }
+            }
+        }
+        .padding(18)
+        .frame(width: 460)
     }
 }
 

@@ -56,6 +56,10 @@ final class SQLiteSessionStore {
         );
         CREATE INDEX IF NOT EXISTS idx_messages_session
             ON messages(session_id, sort_index);
+        CREATE TABLE IF NOT EXISTS session_summaries (
+            session_id TEXT PRIMARY KEY,
+            json TEXT NOT NULL
+        );
         """)
         // Trigram tokenizer keeps the previous substring-search semantics for
         // both Latin and CJK text.
@@ -336,6 +340,49 @@ final class SQLiteSessionStore {
         lock.lock()
         defer { lock.unlock() }
         _ = try? exec("PRAGMA wal_checkpoint(TRUNCATE);")
+    }
+
+    // MARK: - Session summaries
+
+    func loadSummaries() -> [SessionSummary] {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let db else { return [] }
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(db, "SELECT json FROM session_summaries;", -1, &statement, nil) == SQLITE_OK else {
+            return []
+        }
+        var result: [SessionSummary] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let jsonText = sqlite3_column_text(statement, 0),
+                  let data = String(cString: jsonText).data(using: .utf8),
+                  let summary = try? JSONDecoder().decode(SessionSummary.self, from: data) else { continue }
+            result.append(summary)
+        }
+        return result
+    }
+
+    func saveSummary(_ summary: SessionSummary) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard db != nil,
+              let data = try? JSONEncoder().encode(summary) else { return }
+        _ = try? insert(
+            "INSERT OR REPLACE INTO session_summaries(session_id, json) VALUES(?, ?);",
+            texts: [summary.sessionID.uuidString, String(decoding: data, as: UTF8.self)],
+            ints: []
+        )
+    }
+
+    func deleteSummary(sessionID: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        _ = try? insert(
+            "DELETE FROM session_summaries WHERE session_id = ?;",
+            texts: [sessionID.uuidString],
+            ints: []
+        )
     }
 
     // MARK: - Full-text search

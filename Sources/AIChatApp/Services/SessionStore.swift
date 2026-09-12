@@ -35,6 +35,9 @@ final class SessionStore: ObservableObject {
     /// True once the FTS index has been built (search falls back until then).
     private(set) var ftsReady = false
 
+    /// Per-session summaries (small; safe to keep fully in memory).
+    @Published private(set) var summaries: [UUID: SessionSummary] = [:]
+
     // MARK: - Published state
 
     /// When true, persist() is a no-op. Set while the streaming pipeline
@@ -103,6 +106,12 @@ final class SessionStore: ObservableObject {
             self.activeSessionID = id
         } else {
             self.activeSessionID = self.sessions.first?.id
+        }
+
+        if let database {
+            for summary in database.loadSummaries() {
+                summaries[summary.sessionID] = summary
+            }
         }
 
         // Phase 2.2: move legacy base64 attachments to Application Support
@@ -233,6 +242,7 @@ final class SessionStore: ObservableObject {
     /// Deletes a session (by id).
     func delete(_ session: ChatSession) {
         Self.deleteAttachmentFiles(in: session.messages)
+        deleteSummary(sessionID: session.id)
         sessions.removeAll { $0.id == session.id }
         deleteSessionRow(session.id)
         persistAllSessionMetas()
@@ -292,6 +302,7 @@ final class SessionStore: ObservableObject {
 
     /// Deletes all sessions.
     func deleteAll() {
+        for session in sessions { deleteSummary(sessionID: session.id) }
         for session in sessions {
             Self.deleteAttachmentFiles(in: session.messages)
         }
@@ -337,6 +348,7 @@ final class SessionStore: ObservableObject {
         sessions[index].messages.append(message)
         sessions[index].messageCount = sessions[index].messages.count
         sessions[index].autoTitle()
+        markSummaryStale(sessionID)
         persistMessage(message, in: sessionID)
         persistSession(sessions[index])
     }
@@ -436,6 +448,7 @@ final class SessionStore: ObservableObject {
         guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
         sessions[index].messages.removeAll { $0.id == message.id }
         sessions[index].messageCount = max(0, sessions[index].messageCount - 1)
+        markSummaryStale(sessionID)
         deleteMessageRow(message.id)
     }
 
@@ -452,6 +465,7 @@ final class SessionStore: ObservableObject {
         Self.deleteAttachmentFiles(in: [sessions[sessionIndex].messages[msgIndex]])
         sessions[sessionIndex].messages.remove(at: msgIndex)
         sessions[sessionIndex].messageCount = sessions[sessionIndex].messages.count
+        markSummaryStale(sessionID)
         deleteMessageRow(removedID)
     }
 
@@ -472,6 +486,7 @@ final class SessionStore: ObservableObject {
         sessions[sessionIndex].messages.removeSubrange(messageIndex...)
         sessions[sessionIndex].messages.insert(replacement, at: messageIndex)
         sessions[sessionIndex].messageCount = sessions[sessionIndex].messages.count
+        markSummaryStale(sessionID)
         persistWholeSessionMessages(sessionID)
         persistSession(sessions[sessionIndex])
     }
@@ -496,6 +511,7 @@ final class SessionStore: ObservableObject {
         sessions[sessionIndex].messages.insert(replacement, at: messageIndex)
         sessions[sessionIndex].messages.append(assistant)
         sessions[sessionIndex].messageCount = sessions[sessionIndex].messages.count
+        markSummaryStale(sessionID)
         persistWholeSessionMessages(sessionID)
         persistSession(sessions[sessionIndex])
     }
@@ -598,6 +614,30 @@ final class SessionStore: ObservableObject {
     }
 
     // MARK: - Agent questions
+
+    // MARK: - Session summaries
+
+    func summary(for sessionID: UUID) -> SessionSummary? {
+        summaries[sessionID]
+    }
+
+    func saveSummary(_ summary: SessionSummary) {
+        summaries[summary.sessionID] = summary
+        sqlite?.saveSummary(summary)
+    }
+
+    func deleteSummary(sessionID: UUID) {
+        summaries.removeValue(forKey: sessionID)
+        sqlite?.deleteSummary(sessionID: sessionID)
+    }
+
+    /// Cheap local invalidation: any message change makes the summary stale.
+    func markSummaryStale(_ sessionID: UUID) {
+        guard var summary = summaries[sessionID], summary.status != .stale else { return }
+        summary.status = .stale
+        summaries[sessionID] = summary
+        sqlite?.saveSummary(summary)
+    }
 
     /// Attaches a structured question to an assistant message. The message
     /// content is set to the human-readable question so the wire history stays

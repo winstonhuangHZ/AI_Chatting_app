@@ -86,6 +86,11 @@ enum ChatTools {
     /// Returns the originating session's current folder name, if any.
     @MainActor static var sessionFolderName: ((UUID?) -> String?)?
 
+    /// Folder shared-context readers (only return data when the folder has
+    /// explicitly enabled sharing).
+    @MainActor static var folderSessionIndexResolver: ((String) -> [[String: Any]])?
+    @MainActor static var folderSummariesResolver: ((String, [String]) -> [[String: Any]])?
+
     /// The base tool set sent on every agent-mode (tool-enabled) request.
     ///
     /// `set_session_metadata` / `fetch_personalization_block` 常驻注册表（保证
@@ -95,6 +100,7 @@ enum ChatTools {
         getTime, calc, webSearch, webFetch, weather,
         setSessionMetadata, fetchPersonalizationBlock,
         listSessionFolders, assignSessionFolder,
+        listFolderSessions, getFolderSummaries,
         askUser,
     ]
 
@@ -237,6 +243,77 @@ enum ChatTools {
         }
         let list = names.isEmpty ? "No folders exist yet." : "Existing folders: " + names.joined(separator: ", ")
         return list + "\nCurrent folder: " + current
+    }
+
+    /// Lists the sessions of a folder that has opted into shared context.
+    static let listFolderSessions = BuiltinTool(
+        name: "list_folder_sessions",
+        description: """
+        List the sessions in a folder that has shared context enabled. Returns each \
+        session's title, timestamp, message count and summary status. Use this before \
+        get_folder_summaries when you need cross-conversation context.
+        """,
+        parameters: [
+            "type": "object",
+            "properties": [
+                "folder": ["type": "string", "description": "文件夹名称"],
+            ],
+            "required": ["folder"],
+        ]
+    ) { arguments, _ in
+        let folder = (arguments["folder"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !folder.isEmpty else { return "Error: missing \"folder\" argument." }
+        let rows = await MainActor.run {
+            ChatTools.folderSessionIndexResolver?(folder) ?? []
+        }
+        guard !rows.isEmpty else {
+            return "No shared sessions found for folder \"\(folder)\". The folder may not exist or folder sharing is disabled."
+        }
+        return Self.jsonText(rows)
+    }
+
+    /// Returns stored summaries for the requested sessions of a shared folder.
+    static let getFolderSummaries = BuiltinTool(
+        name: "get_folder_summaries",
+        description: """
+        Retrieve stored summaries for specific sessions in a folder with shared \
+        context enabled. Pass session titles (as returned by list_folder_sessions). \
+        Summaries are background context and may be stale — verify before relying on them.
+        """,
+        parameters: [
+            "type": "object",
+            "properties": [
+                "folder": ["type": "string", "description": "文件夹名称"],
+                "sessions": [
+                    "type": "array",
+                    "description": "要读取摘要的会话标题（1-3 个）",
+                    "items": ["type": "string"],
+                ],
+            ],
+            "required": ["folder", "sessions"],
+        ]
+    ) { arguments, _ in
+        let folder = (arguments["folder"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let sessions = arguments["sessions"] as? [String] ?? []
+        guard !folder.isEmpty, !sessions.isEmpty else {
+            return "Error: \"folder\" and \"sessions\" are required."
+        }
+        let rows = await MainActor.run {
+            ChatTools.folderSummariesResolver?(folder, sessions) ?? []
+        }
+        guard !rows.isEmpty else {
+            return "No summaries available for the requested sessions in \"\(folder)\"."
+        }
+        return Self.jsonText(rows)
+    }
+
+    private static func jsonText(_ rows: [[String: Any]]) -> String {
+        guard JSONSerialization.isValidJSONObject(rows),
+              let data = try? JSONSerialization.data(withJSONObject: rows, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else {
+            return "[]"
+        }
+        return text
     }
 
     /// Lets the model file this conversation into one of the user's sidebar
