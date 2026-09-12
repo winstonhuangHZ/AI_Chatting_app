@@ -427,6 +427,9 @@ enum ChatStreamEvent: Sendable {
 
     /// Reasoning ("thinking") text for the final answer (DeepSeek).
     case reasoning(String)
+
+    /// The model wants to ask the user a structured clarification question.
+    case question(AgentQuestionRequest)
 }
 
 /// Accumulates fragmented streaming tool-call deltas for one index.
@@ -1007,6 +1010,27 @@ actor OpenAIService {
                         )
                         history.append(.toolCall(assistantMessage))
 
+                        // Lightweight human-in-the-loop: stop this agent run and
+                        // let the UI render a native question card. We do NOT
+                        // append a tool result; the next request uses the
+                        // persisted assistant question text + user answer.
+                        if let questionCall = sorted.first(where: { $0.value.name == "ask_user" }) {
+                            if !outcome.reasoning.isEmpty {
+                                continuation.yield(.reasoning(outcome.reasoning))
+                            }
+                            if let request = Self.parseAgentQuestion(questionCall.value.arguments) {
+                                continuation.yield(.question(request))
+                            } else {
+                                continuation.yield(.toolRecord(MessageToolCallRecord(
+                                    name: "ask_user",
+                                    arguments: questionCall.value.arguments,
+                                    resultPreview: "Invalid ask_user payload"
+                                )))
+                            }
+                            continuation.finish()
+                            return
+                        }
+
                         for (_, acc) in sorted {
                             let toolName = acc.name.isEmpty ? "unknown" : acc.name
                             continuation.yield(.toolActivity(toolName))
@@ -1457,6 +1481,35 @@ actor OpenAIService {
     }
 
     // MARK: - Helpers
+
+    /// Parses the `ask_user` tool arguments into a structured question.
+    private static func parseAgentQuestion(_ json: String) -> AgentQuestionRequest? {
+        guard let data = json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let question = object["question"] as? String,
+              !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+
+        let rawOptions = object["options"] as? [[String: Any]] ?? []
+        let options: [AgentQuestionOption] = rawOptions.compactMap { item in
+            guard let label = item["label"] as? String,
+                  let value = item["value"] as? String,
+                  !label.isEmpty, !value.isEmpty else { return nil }
+            return AgentQuestionOption(
+                label: label,
+                value: value,
+                description: item["description"] as? String
+            )
+        }
+
+        return AgentQuestionRequest(
+            question: question,
+            options: Array(options.prefix(6)),
+            allowMultiple: object["allow_multiple"] as? Bool ?? false,
+            allowCustom: object["allow_custom"] as? Bool ?? true
+        )
+    }
 
     // MARK: - Account balance (best effort)
 

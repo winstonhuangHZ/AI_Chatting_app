@@ -311,6 +311,9 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     /// Index into `versions` currently shown in the bubble.
     var activeVersionIndex: Int
 
+    /// Structured agent question attached to this assistant message (if any).
+    var question: AgentQuestion?
+
     // MARK: - Initializers
 
     init(
@@ -326,7 +329,8 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         toolFlow: [MessageToolCallRecord] = [],
         reasoningContent: String? = nil,
         versions: [ChatMessageVersion] = [],
-        activeVersionIndex: Int = 0
+        activeVersionIndex: Int = 0,
+        question: AgentQuestion? = nil
     ) {
         self.id = id
         self.role = role
@@ -341,6 +345,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         self.reasoningContent = reasoningContent
         self.versions = versions
         self.activeVersionIndex = activeVersionIndex
+        self.question = question
     }
 
     /// Convenience factory for user messages (with optional image attachments).
@@ -388,6 +393,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         versions = try container.decodeIfPresent([ChatMessageVersion].self, forKey: .versions) ?? []
         activeVersionIndex = try container.decodeIfPresent(Int.self, forKey: .activeVersionIndex)
             ?? max(0, versions.count - 1)
+        question = try container.decodeIfPresent(AgentQuestion.self, forKey: .question)
     }
 }
 
@@ -401,6 +407,7 @@ struct ChatMessageVersion: Identifiable, Codable, Hashable {
     var sources: [ChatSource]
     var toolFlow: [MessageToolCallRecord]
     var reasoningContent: String?
+    var question: AgentQuestion?
 
     init(
         id: UUID = UUID(),
@@ -410,7 +417,8 @@ struct ChatMessageVersion: Identifiable, Codable, Hashable {
         usage: MessageUsage?,
         sources: [ChatSource],
         toolFlow: [MessageToolCallRecord],
-        reasoningContent: String?
+        reasoningContent: String?,
+        question: AgentQuestion? = nil
     ) {
         self.id = id
         self.content = content
@@ -420,6 +428,7 @@ struct ChatMessageVersion: Identifiable, Codable, Hashable {
         self.sources = sources
         self.toolFlow = toolFlow
         self.reasoningContent = reasoningContent
+        self.question = question
     }
 
     init(message: ChatMessage) {
@@ -430,7 +439,8 @@ struct ChatMessageVersion: Identifiable, Codable, Hashable {
             usage: message.usage,
             sources: message.sources,
             toolFlow: message.toolFlow,
-            reasoningContent: message.reasoningContent
+            reasoningContent: message.reasoningContent,
+            question: message.question
         )
     }
 }

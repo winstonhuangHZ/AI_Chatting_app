@@ -324,6 +324,17 @@ final class ChatViewModel: ObservableObject {
             value as ground truth. Never guess or fabricate a time.
             """
         }
+        // Lightweight human-in-the-loop (Agent mode only).
+        let askMarker = "ASK_USER TOOL"
+        if config.toolsEnabled && !prompt.contains(askMarker) {
+            prompt += """
+
+            ASK_USER TOOL: When a blocking ambiguity would change what you do next and you \
+            cannot safely infer the answer, call ask_user with 2-4 concrete options instead \
+            of guessing. Ask at most ONE question per run, then STOP and wait for the user. \
+            Never use it for trivial choices, and never keep working after asking.
+            """
+        }
         return prompt
     }
 
@@ -854,6 +865,29 @@ final class ChatViewModel: ObservableObject {
         )
     }
 
+    /// Answers a lightweight agent question: persists the answer on the
+    /// question card, then continues the conversation with the user's answer as
+    /// an ordinary user message.
+    func answerAgentQuestion(_ message: ChatMessage, answerText: String) {
+        guard let sessionID = activeSessionID,
+              let config = configStore.activeConfig,
+              let question = message.question,
+              question.status == .pending else { return }
+        let trimmed = answerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        sessionStore.answerQuestion(
+            messageID: message.id,
+            answer: trimmed,
+            in: sessionID
+        )
+        sendMessage(
+            trimmed,
+            config: config,
+            model: config.selectedModel
+        )
+    }
+
     // MARK: - Generation pipeline
 
     /// Tool set for timestamp-only (non-agent) chats.
@@ -1183,6 +1217,7 @@ final class ChatViewModel: ObservableObject {
         var lastFlush = ContinuousClock.now
         var collectedSources: [ChatSource] = []
         var toolFlow: [MessageToolCallRecord] = []
+        var askedQuestion = false
 
         for try await event in stream {
             guard streamGeneration == generation else { return }
@@ -1218,12 +1253,29 @@ final class ChatViewModel: ObservableObject {
                 // DeepSeek reasoning text for the final answer — persist it so
                 // the next request can pass it back.
                 sessionStore.updateLastAssistantReasoning(r, in: sessionID)
+            case .question(let request):
+                // Lightweight human-in-the-loop: attach the structured card to
+                // the assistant bubble and stop this run.
+                let question = AgentQuestion(request: request)
+                sessionStore.attachQuestionToLast(question, in: sessionID)
+                askedQuestion = true
+                currentToolActivity = nil
             }
         }
 
         // If this stream was superseded by a newer generation while the tool
         // loop was finishing, do not attach its output or state to the new one.
         guard streamGeneration == generation else { return }
+
+        if askedQuestion {
+            sessionStore.forcePersist()
+            isStreaming = false
+            streamTask = nil
+            streamingAssistantID = nil
+            hasReceivedFirstToken = false
+            currentToolActivity = nil
+            return
+        }
 
         // Always flush the final accumulated text after the stream ends.
         sessionStore.updateLastAssistantContent(

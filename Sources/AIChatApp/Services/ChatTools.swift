@@ -95,6 +95,7 @@ enum ChatTools {
         getTime, calc, webSearch, webFetch, weather,
         setSessionMetadata, fetchPersonalizationBlock,
         listSessionFolders, assignSessionFolder,
+        askUser,
     ]
 
     /// The full lookup registry: `all` plus the environment-gated
@@ -140,6 +141,47 @@ enum ChatTools {
             tools.append(compileLaTeX)
         }
         return tools
+    }
+
+    // MARK: - ask_user
+
+    /// Lightweight human-in-the-loop question. The service intercepts this
+    /// call instead of executing it: it ends the current agent run, the app
+    /// shows a native question card, and the user's answer arrives as a normal
+    /// user message on the next turn.
+    static let askUser = BuiltinTool(
+        name: "ask_user",
+        description: """
+        Ask the user a blocking clarification question when the answer changes what you do \
+        next and you cannot safely infer it. Provide 2-4 concrete options with short labels. \
+        Use allow_custom when a free-form answer is also possible. Ask at most one question per \
+        run, then stop and wait — do not guess and do not keep working.
+        """,
+        parameters: [
+            "type": "object",
+            "properties": [
+                "question": ["type": "string", "description": "用户需要回答的问题"],
+                "options": [
+                    "type": "array",
+                    "description": "2-4 个具体选项（可为空，仅自由输入）",
+                    "items": [
+                        "type": "object",
+                        "properties": [
+                            "label": ["type": "string", "description": "按钮显示的文字"],
+                            "value": ["type": "string", "description": "返回给模型的稳定值"],
+                            "description": ["type": "string", "description": "可选说明"],
+                        ],
+                        "required": ["label", "value"],
+                    ],
+                ],
+                "allow_multiple": ["type": "boolean", "description": "是否允许多选"],
+                "allow_custom": ["type": "boolean", "description": "是否允许自由输入"],
+            ],
+            "required": ["question"],
+        ]
+    ) { _, _ in
+        // Normally intercepted by OpenAIService before execution.
+        return "The app is showing this question to the user."
     }
 
     // MARK: - set_session_metadata

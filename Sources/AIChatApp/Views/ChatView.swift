@@ -988,7 +988,11 @@ private struct MessageBubble: View {
                     reasoningSection(reasoning)
                 }
 
-                if isEditing {
+                if let question = message.question {
+                    AgentQuestionCard(question: question) { answer in
+                        chatViewModel.answerAgentQuestion(message, answerText: answer)
+                    }
+                } else if isEditing {
                     editComposer
                 } else if !contentDisplay.isEmpty {
                     if message.role == .assistant && isStreaming {
@@ -1411,6 +1415,144 @@ private struct MessageBubble: View {
 }
 
 // MARK: - Message detail popover
+
+/// Native SwiftUI card for the lightweight `ask_user` agent tool.
+private struct AgentQuestionCard: View {
+    let question: AgentQuestion
+    let onAnswer: (String) -> Void
+
+    @EnvironmentObject private var appearance: AppearanceStore
+    @EnvironmentObject private var localization: LocalizationManager
+
+    @State private var selected: Set<String> = []
+    @State private var custom = ""
+
+    private var isPending: Bool { question.status == .pending }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "questionmark.bubble.fill")
+                    .foregroundStyle(appearance.accentColor)
+                Text(L("agent.question.title"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if !isPending {
+                    Label(L("agent.question.answered"), systemImage: "checkmark.circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.green)
+                }
+            }
+
+            Text(question.question)
+                .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if isPending {
+                if !question.options.isEmpty {
+                    VStack(spacing: 6) {
+                        ForEach(question.options) { option in
+                            optionButton(option)
+                        }
+                    }
+                }
+
+                if question.allowCustom {
+                    HStack(spacing: 6) {
+                        TextField(L("agent.question.placeholder"), text: $custom)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit(submitCustom)
+                        Button(L("agent.question.send"), action: submitCustom)
+                            .buttonStyle(.bordered)
+                            .disabled(custom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+
+                if question.allowMultiple, !question.options.isEmpty {
+                    Button(L("agent.question.submit")) {
+                        let labels = question.options
+                            .filter { selected.contains($0.value) }
+                            .map(\.label)
+                        guard !labels.isEmpty else { return }
+                        onAnswer(labels.joined(separator: "、"))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(appearance.accentColor)
+                    .disabled(selected.isEmpty)
+                }
+            } else if let answer = question.answer {
+                Label(answer, systemImage: "checkmark.circle")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: 560, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(appearance.isClaudeTheme
+                      ? AppearanceStore.claudeAccent.opacity(0.10)
+                      : Color.accentColor.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(appearance.accentColor.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func optionButton(_ option: AgentQuestionOption) -> some View {
+        Button {
+            if question.allowMultiple {
+                if selected.contains(option.value) {
+                    selected.remove(option.value)
+                } else {
+                    selected.insert(option.value)
+                }
+            } else {
+                onAnswer(option.label)
+            }
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: selectionIcon(option))
+                    .foregroundStyle(appearance.accentColor)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(option.label)
+                        .appearanceFont(appearance.fontPreset, size: appearance.pointSize - 1)
+                    if let description = option.description, !description.isEmpty {
+                        Text(description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(selected.contains(option.value)
+                          ? appearance.accentColor.opacity(0.16)
+                          : Color.primary.opacity(0.04))
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func selectionIcon(_ option: AgentQuestionOption) -> String {
+        if question.allowMultiple {
+            return selected.contains(option.value) ? "checkmark.square.fill" : "square"
+        }
+        return "circle"
+    }
+
+    private func submitCustom() {
+        let trimmed = custom.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        onAnswer(trimmed)
+    }
+}
 
 /// Generation metadata for an assistant reply: model, exact send/receive time,
 /// relay-reported token usage and the tool-call flow (Agent mode / get_time).

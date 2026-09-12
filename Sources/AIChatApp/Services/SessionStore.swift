@@ -522,6 +522,7 @@ final class SessionStore: ObservableObject {
         sessions[sessionIndex].messages[messageIndex].sources = version.sources
         sessions[sessionIndex].messages[messageIndex].toolFlow = version.toolFlow
         sessions[sessionIndex].messages[messageIndex].reasoningContent = version.reasoningContent
+        sessions[sessionIndex].messages[messageIndex].question = version.question
         persistMessage(sessions[sessionIndex].messages[messageIndex], in: sessionID)
     }
 
@@ -534,6 +535,44 @@ final class SessionStore: ObservableObject {
         }
         let index = sessions[sessionIndex].messages[messageIndex].activeVersionIndex
         selectAssistantVersion(messageID: messageID, index: index, in: sessionID)
+    }
+
+    // MARK: - Agent questions
+
+    /// Attaches a structured question to an assistant message. The message
+    /// content is set to the human-readable question so the wire history stays
+    /// coherent without any UI metadata.
+    func attachQuestion(_ question: AgentQuestion, to messageID: UUID, in sessionID: UUID) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let messageIndex = sessions[sessionIndex].messages.firstIndex(where: { $0.id == messageID }) else {
+            return
+        }
+        sessions[sessionIndex].messages[messageIndex].question = question
+        sessions[sessionIndex].messages[messageIndex].content = question.question
+        persistMessage(sessions[sessionIndex].messages[messageIndex], in: sessionID)
+    }
+
+    func attachQuestionToLast(_ question: AgentQuestion, in sessionID: UUID) {
+        guard let messageID = sessions.first(where: { $0.id == sessionID })?.messages.last?.id else { return }
+        attachQuestion(question, to: messageID, in: sessionID)
+    }
+
+    /// Marks a question as answered and stores the chosen answer text.
+    func answerQuestion(
+        messageID: UUID,
+        answer: String,
+        in sessionID: UUID
+    ) {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+              let messageIndex = sessions[sessionIndex].messages.firstIndex(where: { $0.id == messageID }),
+              var question = sessions[sessionIndex].messages[messageIndex].question else {
+            return
+        }
+        question.status = .answered
+        question.answer = answer
+        question.answeredAt = Date()
+        sessions[sessionIndex].messages[messageIndex].question = question
+        persistMessage(sessions[sessionIndex].messages[messageIndex], in: sessionID)
     }
 
     // MARK: - Persistence
