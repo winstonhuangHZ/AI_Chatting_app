@@ -405,11 +405,18 @@ final class ChatViewModel: ObservableObject {
         // 第一轮对话的 AI 通过 set_session_metadata 工具挑选会话 emoji/标题。
         // 全局 sink：工具在后台线程执行，跳回主线程后应用到当前活动会话。
         ChatTools.sessionMetadataSink = { [weak self] sessionID, emoji, title in
-            guard let self else { return }
+            guard let self else { return "Error: metadata unavailable." }
             // The tool carries the originating session, not necessarily the
             // session the user is currently viewing (streams survive switching).
-            guard let targetSessionID = sessionID ?? self.activeSessionID else { return }
+            guard let targetSessionID = sessionID ?? self.activeSessionID,
+                  let session = self.sessions.first(where: { $0.id == targetSessionID }) else {
+                return "Error: session not found."
+            }
+            if session.hasModelTitle {
+                return "Title is already set to “\(session.title)”; this call was ignored."
+            }
             self.sessionStore.updateSessionMetadata(emoji: emoji, title: title, in: targetSessionID)
+            return "Set title to “\(title)”" + (emoji.isEmpty ? "." : " with emoji \(emoji).")
         }
 
         // 个性化块工具：主线程读 PersonalizationStore，按名字返回内容 / 可用名字列表。
@@ -426,15 +433,22 @@ final class ChatViewModel: ObservableObject {
         }
         ChatTools.folderAssigner = { [weak self] sessionID, name in
             guard let self,
-                  let folder = self.folderStore.folder(named: name),
-                  let targetSessionID = sessionID ?? self.activeSessionID else { return }
+                  let targetSessionID = sessionID ?? self.activeSessionID else {
+                return "Error: session not found."
+            }
             // Once a conversation has a folder, only the user may move it.
             // This prevents a single off-topic remark from reclassifying an
             // established conversation.
-            guard self.sessions.first(where: { $0.id == targetSessionID })?.folderID == nil else {
-                return
+            let session = self.sessions.first(where: { $0.id == targetSessionID })
+            if let existingID = session?.folderID,
+               let existing = self.folderStore.folders.first(where: { $0.id == existingID }) {
+                return "Conversation is already in folder “\(existing.name)”; this call was ignored."
+            }
+            guard let folder = self.folderStore.folder(named: name) else {
+                return "Error: invalid folder name."
             }
             self.sessionStore.move(sessionID: targetSessionID, to: folder.id)
+            return "Assigned to folder “\(folder.name)”."
         }
         ChatTools.sessionFolderName = { [weak self] sessionID in
             guard let self,

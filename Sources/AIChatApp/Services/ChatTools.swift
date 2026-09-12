@@ -68,7 +68,7 @@ enum ChatTools {
 
     /// 由 ChatViewModel 注入的处理函数：应用 AI 在第一轮对话为会话挑选的
     /// emoji 和标题。工具在后台线程执行，通过 `MainActor.run` 跳回主线程调用。
-    @MainActor static var sessionMetadataSink: ((UUID?, String, String) -> Void)?
+    @MainActor static var sessionMetadataSink: ((UUID?, String, String) -> String)?
 
     /// 由 ChatViewModel 注入的个性化块解析器：按名字返回个性化块内容，未找到返回 nil。
     /// 供 `fetch_personalization_block` 工具在主线程查询 PersonalizationStore。
@@ -81,7 +81,7 @@ enum ChatTools {
     @MainActor static var folderNames: (() -> [String])?
 
     /// Assigns (or creates) a folder for the originating session.
-    @MainActor static var folderAssigner: ((UUID?, String) -> Void)?
+    @MainActor static var folderAssigner: ((UUID?, String) -> String)?
 
     /// Returns the originating session's current folder name, if any.
     @MainActor static var sessionFolderName: ((UUID?) -> String?)?
@@ -170,10 +170,10 @@ enum ChatTools {
             let title = (arguments["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let emoji = (arguments["emoji"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !title.isEmpty else { return "Error: title must not be empty." }
-            await MainActor.run {
+            let result = await MainActor.run {
                 ChatTools.sessionMetadataSink?(sessionID, emoji, title)
             }
-            return "已为对话设置标题“\(title)”、emoji“\(emoji.isEmpty ? "（无）" : emoji)”。"
+            return result ?? "Error: session metadata is unavailable."
         }
     )
 
@@ -219,10 +219,10 @@ enum ChatTools {
         execute: { arguments, sessionID in
             let name = (arguments["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !name.isEmpty else { return "Error: folder name must not be empty." }
-            await MainActor.run {
+            let result = await MainActor.run {
                 ChatTools.folderAssigner?(sessionID, name)
             }
-            return "已将当前会话归类到文件夹「\(name)」。"
+            return result ?? "Error: folder assignment is unavailable."
         }
     )
 
