@@ -28,28 +28,81 @@ struct ImageAttachment: Identifiable, Codable, Hashable {
     /// Base64-encoded image bytes (no `data:` prefix).
     var base64Data: String
 
+    /// Relative path under Application Support when the payload lives on disk.
+    /// New attachments use this; `base64Data` stays for legacy messages.
+    var filePath: String?
+
     // MARK: - Initializers
 
     init(
         id: UUID = UUID(),
         filename: String,
         mimeType: String,
-        base64Data: String
+        base64Data: String,
+        filePath: String? = nil
     ) {
         self.id = id
         self.filename = filename
         self.mimeType = mimeType
         self.base64Data = base64Data
+        self.filePath = filePath
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, filename, mimeType, base64Data, filePath
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        filename = try c.decode(String.self, forKey: .filename)
+        mimeType = try c.decode(String.self, forKey: .mimeType)
+        base64Data = try c.decodeIfPresent(String.self, forKey: .base64Data) ?? ""
+        filePath = try c.decodeIfPresent(String.self, forKey: .filePath)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(filename, forKey: .filename)
+        try c.encode(mimeType, forKey: .mimeType)
+        try c.encode(base64Data, forKey: .base64Data)
+        try c.encodeIfPresent(filePath, forKey: .filePath)
     }
 
     /// Full `data:` URI used in the API request.
     var dataURI: String {
-        "data:\(mimeType);base64,\(base64Data)"
+        guard let data = decodedData else {
+            return "data:\(mimeType);base64,\(base64Data)"
+        }
+        return "data:\(mimeType);base64,\(data.base64EncodedString())"
     }
 
     /// Decodes the base64 payload back into `Data` (for preview rendering).
     var decodedData: Data? {
-        Data(base64Encoded: base64Data)
+        if let filePath, let data = AttachmentStore.load(filePath) {
+            return data
+        }
+        return Data(base64Encoded: base64Data)
+    }
+
+    /// Moves the payload to Application Support (idempotent).
+    func externalized() -> ImageAttachment {
+        guard filePath == nil, let data = decodedData else { return self }
+        guard let path = AttachmentStore.store(data, id: id, filename: filename) else { return self }
+        var copy = self
+        copy.filePath = path
+        copy.base64Data = ""
+        return copy
+    }
+
+    /// Self-contained copy for backup export.
+    func inflatedForBackup() -> ImageAttachment {
+        guard let data = decodedData else { return self }
+        var copy = self
+        copy.base64Data = data.base64EncodedString()
+        copy.filePath = nil
+        return copy
     }
 }
 
@@ -93,10 +146,13 @@ struct DocumentAttachment: Identifiable, Codable, Hashable {
     /// 发送方式（图片 / 文字 / 都发），默认两个都发。
     var sendMode: PDFSendMode = .both
 
+    /// Relative path under Application Support when bytes live on disk.
+    var filePath: String?
+
     // MARK: - Coding (旧消息没有 sendMode 字段，需容错解码)
 
     private enum CodingKeys: String, CodingKey {
-        case id, filename, mimeType, base64Data, pageCount, sendMode
+        case id, filename, mimeType, base64Data, pageCount, sendMode, filePath
     }
 
     init(
@@ -105,7 +161,8 @@ struct DocumentAttachment: Identifiable, Codable, Hashable {
         mimeType: String,
         base64Data: String,
         pageCount: Int = 0,
-        sendMode: PDFSendMode = .both
+        sendMode: PDFSendMode = .both,
+        filePath: String? = nil
     ) {
         self.id = id
         self.filename = filename
@@ -113,6 +170,7 @@ struct DocumentAttachment: Identifiable, Codable, Hashable {
         self.base64Data = base64Data
         self.pageCount = pageCount
         self.sendMode = sendMode
+        self.filePath = filePath
     }
 
     init(from decoder: Decoder) throws {
@@ -123,6 +181,7 @@ struct DocumentAttachment: Identifiable, Codable, Hashable {
         base64Data = try c.decode(String.self, forKey: .base64Data)
         pageCount = try c.decodeIfPresent(Int.self, forKey: .pageCount) ?? 0
         sendMode = try c.decodeIfPresent(PDFSendMode.self, forKey: .sendMode) ?? .both
+        filePath = try c.decodeIfPresent(String.self, forKey: .filePath)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -133,11 +192,32 @@ struct DocumentAttachment: Identifiable, Codable, Hashable {
         try c.encode(base64Data, forKey: .base64Data)
         try c.encode(pageCount, forKey: .pageCount)
         try c.encode(sendMode, forKey: .sendMode)
+        try c.encodeIfPresent(filePath, forKey: .filePath)
     }
 
     /// Decodes the base64 payload back into `Data` (for preview / processing).
     var decodedData: Data? {
-        Data(base64Encoded: base64Data)
+        if let filePath, let data = AttachmentStore.load(filePath) {
+            return data
+        }
+        return Data(base64Encoded: base64Data)
+    }
+
+    func externalized() -> DocumentAttachment {
+        guard filePath == nil, let data = decodedData else { return self }
+        guard let path = AttachmentStore.store(data, id: id, filename: filename) else { return self }
+        var copy = self
+        copy.filePath = path
+        copy.base64Data = ""
+        return copy
+    }
+
+    func inflatedForBackup() -> DocumentAttachment {
+        guard let data = decodedData else { return self }
+        var copy = self
+        copy.base64Data = data.base64EncodedString()
+        copy.filePath = nil
+        return copy
     }
 }
 

@@ -98,6 +98,63 @@ final class SessionStore: ObservableObject {
         } else {
             self.activeSessionID = self.sessions.first?.id
         }
+
+        // Phase 2.2: move legacy base64 attachments to Application Support
+        // files. Runs off the main thread; the legacy UserDefaults payload is
+        // untouched, so this is recoverable.
+        let attachmentSnapshot = self.sessions
+        let databaseForMigration = database
+        Self.persistQueue.async {
+            let (imagePaths, documentPaths) = Self.externalizeAttachmentFiles(in: attachmentSnapshot)
+            guard !imagePaths.isEmpty || !documentPaths.isEmpty else { return }
+            DispatchQueue.main.async {
+                var changedMessages: [(UUID, UUID)] = []
+                for sessionIndex in self.sessions.indices {
+                    for messageIndex in self.sessions[sessionIndex].messages.indices {
+                        var message = self.sessions[sessionIndex].messages[messageIndex]
+                        var changed = false
+                        for attachmentIndex in message.attachments.indices
+                        where message.attachments[attachmentIndex].filePath == nil {
+                            if let path = imagePaths[message.attachments[attachmentIndex].id] {
+                                message.attachments[attachmentIndex].filePath = path
+                                message.attachments[attachmentIndex].base64Data = ""
+                                changed = true
+                            }
+                        }
+                        for documentIndex in message.documentAttachments.indices
+                        where message.documentAttachments[documentIndex].filePath == nil {
+                            if let path = documentPaths[message.documentAttachments[documentIndex].id] {
+                                message.documentAttachments[documentIndex].filePath = path
+                                message.documentAttachments[documentIndex].base64Data = ""
+                                changed = true
+                            }
+                        }
+                        if changed {
+                            let sessionID = self.sessions[sessionIndex].id
+                            self.sessions[sessionIndex].messages[messageIndex] = message
+                            changedMessages.append((sessionID, message.id))
+                        }
+                    }
+                }
+                if !changedMessages.isEmpty {
+                    for (sessionID, messageID) in changedMessages {
+                        if let message = self.sessions
+                            .first(where: { $0.id == sessionID })?
+                            .messages.first(where: { $0.id == messageID }) {
+                            self.persistMessage(message, in: sessionID)
+                        }
+                    }
+                    if let databaseForMigration {
+                        let snapshot = self.sessions
+                        Self.persistQueue.async {
+                            if databaseForMigration.replaceAll(snapshot) {
+                                UserDefaults.standard.set(true, forKey: Self.migratedFlagKey)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Session management
@@ -128,6 +185,7 @@ final class SessionStore: ObservableObject {
 
     /// Deletes a session (by id).
     func delete(_ session: ChatSession) {
+        Self.deleteAttachmentFiles(in: session.messages)
         sessions.removeAll { $0.id == session.id }
         deleteSessionRow(session.id)
         persistAllSessionMetas()
@@ -187,6 +245,9 @@ final class SessionStore: ObservableObject {
 
     /// Deletes all sessions.
     func deleteAll() {
+        for session in sessions {
+            Self.deleteAttachmentFiles(in: session.messages)
+        }
         sessions.removeAll()
         activeSessionID = nil
         if let sqlite {
@@ -197,7 +258,8 @@ final class SessionStore: ObservableObject {
     /// Replaces the entire session list (used when importing a backup).
     func replaceAll(with new: [ChatSession]) {
         cancelPersistPause()
-        sessions = new.sorted { $0.createdAt > $1.createdAt }
+        let externalized = Self.externalizingAttachments(in: new).0
+        sessions = externalized.sorted { $0.createdAt > $1.createdAt }
         activeSessionID = sessions.first?.id
         persistPaused = false
         if let sqlite {
@@ -315,6 +377,7 @@ final class SessionStore: ObservableObject {
 
     /// Deletes a single message (by id) from the given session.
     func deleteMessage(_ message: ChatMessage, in sessionID: UUID) {
+        Self.deleteAttachmentFiles(in: [message])
         guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
         sessions[index].messages.removeAll { $0.id == message.id }
         deleteMessageRow(message.id)
@@ -330,6 +393,7 @@ final class SessionStore: ObservableObject {
             return
         }
         let removedID = sessions[sessionIndex].messages[msgIndex].id
+        Self.deleteAttachmentFiles(in: [sessions[sessionIndex].messages[msgIndex]])
         sessions[sessionIndex].messages.remove(at: msgIndex)
         deleteMessageRow(removedID)
     }
@@ -345,6 +409,9 @@ final class SessionStore: ObservableObject {
               let messageIndex = sessions[sessionIndex].messages.firstIndex(where: { $0.id == messageID }) else {
             return
         }
+        Self.deleteAttachmentFiles(
+            in: Array(sessions[sessionIndex].messages[messageIndex...])
+        )
         sessions[sessionIndex].messages.removeSubrange(messageIndex...)
         sessions[sessionIndex].messages.insert(replacement, at: messageIndex)
         persistWholeSessionMessages(sessionID)
@@ -526,6 +593,70 @@ final class SessionStore: ObservableObject {
             }
         } else {
             persist()
+        }
+    }
+
+    // MARK: - Attachment externalization
+
+    private static func externalizingAttachments(
+        in sessions: [ChatSession]
+    ) -> ([ChatSession], Bool) {
+        var changed = false
+        let migrated = sessions.map { session -> ChatSession in
+            var session = session
+            session.messages = session.messages.map { message -> ChatMessage in
+                var message = message
+                message.attachments = message.attachments.map { attachment in
+                    let updated = attachment.externalized()
+                    if updated.filePath != attachment.filePath { changed = true }
+                    return updated
+                }
+                message.documentAttachments = message.documentAttachments.map { document in
+                    let updated = document.externalized()
+                    if updated.filePath != document.filePath { changed = true }
+                    return updated
+                }
+                return message
+            }
+            return session
+        }
+        return (migrated, changed)
+    }
+
+    /// Writes legacy base64 payloads to disk and returns attachment-id → path
+    /// mappings, so the main thread can merge them without replacing sessions.
+    private static func externalizeAttachmentFiles(
+        in sessions: [ChatSession]
+    ) -> ([UUID: String], [UUID: String]) {
+        var imagePaths: [UUID: String] = [:]
+        var documentPaths: [UUID: String] = [:]
+        for session in sessions {
+            for message in session.messages {
+                for attachment in message.attachments where attachment.filePath == nil {
+                    if let data = attachment.decodedData,
+                       let path = AttachmentStore.store(data, id: attachment.id, filename: attachment.filename) {
+                        imagePaths[attachment.id] = path
+                    }
+                }
+                for document in message.documentAttachments where document.filePath == nil {
+                    if let data = document.decodedData,
+                       let path = AttachmentStore.store(data, id: document.id, filename: document.filename) {
+                        documentPaths[document.id] = path
+                    }
+                }
+            }
+        }
+        return (imagePaths, documentPaths)
+    }
+
+    private static func deleteAttachmentFiles(in messages: [ChatMessage]) {
+        for message in messages {
+            for attachment in message.attachments {
+                if let path = attachment.filePath { AttachmentStore.delete(path) }
+            }
+            for document in message.documentAttachments {
+                if let path = document.filePath { AttachmentStore.delete(path) }
+            }
         }
     }
 }

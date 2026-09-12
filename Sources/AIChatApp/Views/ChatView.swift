@@ -1954,7 +1954,7 @@ private struct InputBarView: View {
                 filename: "Pasted Image.\(ext)",
                 mimeType: mime,
                 base64Data: data.base64EncodedString()
-            )
+            ).externalized()
         )
     }
 
@@ -1967,7 +1967,7 @@ private struct InputBarView: View {
                 filename: url.lastPathComponent,
                 mimeType: mime,
                 base64Data: data.base64EncodedString()
-            )
+            ).externalized()
         )
     }
 
@@ -1983,7 +1983,7 @@ private struct InputBarView: View {
                 mimeType: "application/pdf",
                 base64Data: data.base64EncodedString(),
                 pageCount: pages
-            )
+            ).externalized()
         )
     }
 

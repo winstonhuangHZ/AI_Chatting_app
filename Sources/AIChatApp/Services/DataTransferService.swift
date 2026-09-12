@@ -154,9 +154,10 @@ enum DataTransferService {
         // API keys are kept in the Keychain, so backup files must not contain
         // plaintext credentials. Same-UUID profiles hydrate their key on restore.
         let sanitizedProfiles = Self.sanitizedProfiles(profiles)
+        let backupSessions = Self.inflatedForBackup(sessions)
         let backup = BackupBundle(
             exportedAt: Date(),
-            chatSessions: sessions,
+            chatSessions: backupSessions,
             apiProfiles: sanitizedProfiles,
             userPreferences: preferences,
             folders: folders,
@@ -172,7 +173,7 @@ enum DataTransferService {
 
         // 生成各 JSON 文件的内容。
         let manifestData = try encoder.encode(backup)
-        let sessionsData = try encoder.encode(sessions)
+        let sessionsData = try encoder.encode(backupSessions)
         let profilesData = try encoder.encode(sanitizedProfiles)
         let prefsData = try encoder.encode(preferences)
 
@@ -226,6 +227,7 @@ enum DataTransferService {
         displayName: String? = nil,
         avatarData: Data? = nil
     ) throws {
+        let exportSessions = Self.inflatedForBackup(sessions)
         var db: OpaquePointer?
         guard sqlite3_open(url.path, &db) == SQLITE_OK, let db else {
             throw BackupError.sqliteFailed
@@ -249,7 +251,7 @@ enum DataTransferService {
         }
 
         // 会话 & 消息
-        for session in sessions {
+        for session in exportSessions {
             guard sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil) == SQLITE_OK else {
                 throw BackupError.sqliteFailed
             }
@@ -323,7 +325,7 @@ enum DataTransferService {
         // bundle in meta so a SQLite round-trip loses nothing.
         let fullBackup = BackupBundle(
             exportedAt: Date(),
-            chatSessions: sessions,
+            chatSessions: exportSessions,
             apiProfiles: Self.sanitizedProfiles(profiles),
             userPreferences: preferences,
             folders: folders,
@@ -536,6 +538,21 @@ enum DataTransferService {
             copy.apiKey = ""
             copy.searchAPIKey = ""
             return copy
+        }
+    }
+
+    /// Backup files must stay self-contained: inline any attachment that now
+    /// lives as a file under Application Support.
+    private static func inflatedForBackup(_ sessions: [ChatSession]) -> [ChatSession] {
+        sessions.map { session in
+            var session = session
+            session.messages = session.messages.map { message in
+                var message = message
+                message.attachments = message.attachments.map { $0.inflatedForBackup() }
+                message.documentAttachments = message.documentAttachments.map { $0.inflatedForBackup() }
+                return message
+            }
+            return session
         }
     }
 
