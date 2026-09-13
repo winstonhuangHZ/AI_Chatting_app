@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// A single learned or manually-added user preference.
@@ -60,7 +61,23 @@ final class UserProfileStore: ObservableObject {
 
     /// Avatar image data kept locally so it continues working if the source file moves.
     @Published var avatarData: Data? {
-        didSet { UserDefaults.standard.set(avatarData, forKey: Self.avatarKey) }
+        didSet {
+            UserDefaults.standard.set(avatarData, forKey: Self.avatarKey)
+            cachedAvatarImage = nil
+        }
+    }
+
+    /// Decoded avatar, cached across row re-renders.
+    ///
+    /// Every visible user message renders the avatar, so decoding the image on
+    /// each body re-evaluation (scroll, hover, streaming) is pure waste.
+    private var cachedAvatarImage: NSImage?
+
+    var avatarImage: NSImage? {
+        if let cachedAvatarImage { return cachedAvatarImage }
+        guard let avatarData, let image = NSImage(data: avatarData) else { return nil }
+        cachedAvatarImage = image
+        return image
     }
 
     // MARK: - Initializers

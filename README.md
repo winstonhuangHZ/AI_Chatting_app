@@ -41,8 +41,8 @@ macOS 原生 AI 聊天桌面应用：支持 OpenAI Chat Completions 兼容接口
 
 | 文件 | 适用 |
 | --- | --- |
-| `AIChatApp-1.3.5-arm64.dmg` | Apple Silicon Mac（M1/M2/M3/M4/M5…） |
-| `AIChatApp-1.3.5-x86_64.dmg` | Intel Mac |
+| `AIChatApp-1.3.6-arm64.dmg` | Apple Silicon Mac（M1/M2/M3/M4/M5…） |
+| `AIChatApp-1.3.6-x86_64.dmg` | Intel Mac |
 
 双击挂载后把 `AIChatApp.app` 拖进「应用程序」即可。
 
@@ -63,7 +63,7 @@ SWIFT_SCRATCH=.build-x86 ARCH=x86_64 ./build_arm64.sh
 
 产物：
 - `.stage/AIChatApp.app` —— 可直接运行的 .app
-- `dist/AIChatApp-1.3.5-<arch>.dmg` —— 安装包
+- `dist/AIChatApp-1.3.6-<arch>.dmg` —— 安装包
 
 > 注：构建脚本会优先使用 `~/aichat-sdk/MacOSX.sdk`（仅当系统 SDK 缺失 `CarbonCore/MacErrors.h` 的少数环境需要该修复层）；正常的 macOS 上会自动回退系统 SDK，无需任何额外操作。
 

@@ -674,13 +674,19 @@ private struct MessageList: View {
                     }
                     .padding(16)
                     // 底部哨兵：精确测量内容底边位置，用于“发送时保持阅读位置”。
-                    GeometryReader { geo in
-                        Color.clear.preference(
-                            key: MessageListBottomEdgeKey.self,
-                            value: geo.frame(in: .named("chatScroll")).maxY
-                        )
+                    //
+                    // macOS 15+ 由 ScrollGeometry 直接驱动底部判定，这里就不再
+                    // 挂几何哨兵/视口观测——它们会让布局系统在每一帧滚动里做偏好
+                    // 汇总（preference 聚合 + 状态写入），是滚动卡顿的来源之一。
+                    if #unavailable(macOS 15.0) {
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: MessageListBottomEdgeKey.self,
+                                value: geo.frame(in: .named("chatScroll")).maxY
+                            )
+                        }
+                        .frame(height: 0)
                     }
-                    .frame(height: 0)
                 }
             }
             .coordinateSpace(name: "chatScroll")
@@ -689,11 +695,13 @@ private struct MessageList: View {
             .scrollPosition(id: $pinnedMessageID, anchor: .bottom)
             .observeScrollBottom($scrollAtBottom, threshold: 80)
             .overlay(alignment: .bottom) {
-                GeometryReader { geo in
-                    Color.clear.preference(
-                        key: MessageListViewportHeightKey.self,
-                        value: geo.size.height
-                    )
+                if #unavailable(macOS 15.0) {
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: MessageListViewportHeightKey.self,
+                            value: geo.size.height
+                        )
+                    }
                 }
             }
             // 主流聊天客户端的“回到底部”按钮：只有用户上翻离开最新消息时出现，
@@ -717,8 +725,15 @@ private struct MessageList: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .onPreferenceChange(MessageListBottomEdgeKey.self) { bottomEdgeY = $0 }
-            .onPreferenceChange(MessageListViewportHeightKey.self) { viewportHeight = $0 }
+            .onPreferenceChange(MessageListBottomEdgeKey.self) { value in
+                // On macOS 15+ the real ScrollGeometry observer below drives
+                // bottom detection. Writing this every scroll frame would
+                // invalidate MessageList on every frame and stutter the list.
+                if #unavailable(macOS 15.0) { bottomEdgeY = value }
+            }
+            .onPreferenceChange(MessageListViewportHeightKey.self) { value in
+                if #unavailable(macOS 15.0) { viewportHeight = value }
+            }
             .onChange(of: scrollAtBottom) { _, atBottom in
                 // Release the anchor as soon as the user scrolls away. Keeping a
                 // stale pinned id makes window resizes re-anchor to the bottom
@@ -757,15 +772,22 @@ private struct MessageList: View {
                     pinnedMessageID = nil
                 }
             }
-            .onChange(of: session.messages.last?.id) { _, newID in
+            .onChange(of: session.messages.last?.id) { oldID, newID in
                 // A user/assistant message was appended. Follow it only when the
                 // viewport is already at the bottom; never yank a scrolled-up
                 // reader down to the latest message.
+                //
+                // 注意 `pinnedMessageID` 会被 `scrollPosition` 双向回写：用户
+                // 上翻时框架会把「视口底边那条消息」的 id 写进来，那个 id 通常
+                // 不是最新消息。旧逻辑只要 `pinnedMessageID != nil` 就跟随，会
+                // 把正在读旧消息的读者突然拽到底部；这里改成只认「钉住目标确实
+                // 是上一条最新消息」的情况。
                 guard let newID else {
                     pinnedMessageID = nil
                     return
                 }
-                if isNearBottom || pinnedMessageID != nil {
+                let wasPinnedToLatest = oldID != nil && pinnedMessageID == oldID
+                if isNearBottom || wasPinnedToLatest {
                     pinnedMessageID = newID
                 }
             }
@@ -873,12 +895,9 @@ private struct MessageBubble: View {
     @State private var isEditing = false
     @State private var editDraft = ""
 
-    /// `true` while the pointer is over this message row; shows hover actions.
-    @State private var isHovering = false
-
-    /// Short-lived "copied" feedback shown on the copy button.
-    @State private var justCopied = false
-    @State private var copyResetTask: Task<Void, Never>?
+    /// Hover state lives in a tiny observable so moving the pointer does not
+    /// re-render this bubble's Markdown body on every hover change.
+    @StateObject private var hoverState = MessageHoverState()
 
     // MARK: - Environment
 
@@ -886,6 +905,10 @@ private struct MessageBubble: View {
     @EnvironmentObject private var chatViewModel: ChatViewModel
     @EnvironmentObject private var userProfileStore: UserProfileStore
     @EnvironmentObject private var localization: LocalizationManager
+
+    /// 深浅色切换会让动态颜色（`.controlBackgroundColor` 等）解析结果变化，
+    /// 所以它必须是正文相等性 key 的一部分——否则切主题时正文可能不刷新。
+    @Environment(\.colorScheme) private var colorScheme
 
     // MARK: - Body
 
@@ -917,10 +940,7 @@ private struct MessageBubble: View {
         .animation(.easeInOut(duration: 0.25), value: isHighlighted)
         .contentShape(Rectangle())
         .onHover { hovering in
-            isHovering = hovering
-        }
-        .onDisappear {
-            copyResetTask?.cancel()
+            hoverState.isHovering = hovering
         }
     }
 
@@ -937,7 +957,16 @@ private struct MessageBubble: View {
                             .help(message.timestamp.formatted(date: .complete, time: .standard))
 
                         // User actions stay on the user (right) side.
-                        hoverActionArea
+                        MessageHoverActionArea(
+                            message: message,
+                            isStreaming: isStreaming,
+                            isEditing: isEditing,
+                            hoverState: hoverState,
+                            onEdit: {
+                                editDraft = message.content
+                                isEditing = true
+                            }
+                        )
                     } else {
                         Text(roleLabel).font(.caption).foregroundStyle(.secondary)
                         Text(message.timestamp.formatted(date: .numeric, time: .shortened))
@@ -964,7 +993,16 @@ private struct MessageBubble: View {
                         }
 
                         // Assistant actions stay on the assistant (left) side.
-                        hoverActionArea
+                        MessageHoverActionArea(
+                            message: message,
+                            isStreaming: isStreaming,
+                            isEditing: isEditing,
+                            hoverState: hoverState,
+                            onEdit: {
+                                editDraft = message.content
+                                isEditing = true
+                            }
+                        )
 
                         Spacer(minLength: 0)
                     }
@@ -994,48 +1032,20 @@ private struct MessageBubble: View {
                 } else if isEditing {
                     editComposer
                 } else if !contentDisplay.isEmpty {
-                    if message.role == .assistant && isStreaming {
-                        // Keep partial replies cheap. Rich Markdown/LaTeX/code
-                        // rendering is deferred until the stream has completed.
-                        Text(contentDisplay)
-                            .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
-                            .foregroundStyle(.primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(bubbleBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .frame(maxWidth: 620, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } else if message.role == .assistant {
-                        MarkdownText(
-                            text: message.content,
-                            fontSize: nil,
-                            onQuote: { chatViewModel.quoteSelection($0) }
-                        )
-                            // Inner: let the markdown breathe to the full row.
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(bubbleBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            // Outer cap so long tables don't stretch the app.
-                            .frame(maxWidth: 620,
-                                   alignment: message.role == .user ? .trailing : .leading)
-                            // Never compress bubble height while streaming.
-                            .fixedSize(horizontal: false, vertical: true)
-                    } else {
-                        Text(contentDisplay)
-                            .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
-                            .foregroundStyle(appearance.userBubbleTextColor)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(bubbleBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .frame(maxWidth: 620,
-                                   alignment: message.role == .user ? .trailing : .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    // 正文单独成视图并做 `.equatable()` 门控：滚动 / 悬停 /
+                    // 侧栏刷新都会让整个列表重新求值，未变化的消息必须跳过
+                    // MarkdownUI 与 NSTextView 的渲染路径。
+                    MessageReplyBody(
+                        content: contentDisplay,
+                        role: message.role,
+                        isStreaming: isStreaming,
+                        bubbleColor: bubbleBackground,
+                        textColor: appearance.userBubbleTextColor,
+                        fontIdentity: appearance.renderIdentity,
+                        theme: appearance.theme,
+                        colorScheme: colorScheme
+                    )
+                    .equatable()
                 }
 
                 if isStreaming {
@@ -1172,76 +1182,6 @@ private struct MessageBubble: View {
         .padding(.horizontal, 4)
         .padding(.vertical, 1)
         .background(Color.secondary.opacity(0.08), in: Capsule())
-    }
-
-    /// Always occupies the same fixed header space; icons fade in on hover so
-    /// neither the row width nor the row height jumps when they appear.
-    @ViewBuilder
-    private var hoverActionArea: some View {
-        HStack(spacing: 2) {
-            if message.role == .user {
-                iconButton("pencil", L("msg.edit")) {
-                    editDraft = message.content
-                    isEditing = true
-                }
-            } else {
-                iconButton("arrow.clockwise", L("msg.retry")) {
-                    chatViewModel.retryMessage(message)
-                }
-                .disabled(isStreaming)
-            }
-
-            Button {
-                copyWithFeedback()
-            } label: {
-                Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 10, weight: .medium))
-                    .frame(width: 20, height: 14)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(justCopied ? Color.green : Color.secondary)
-            .help(L(justCopied ? "msg.copied" : "msg.copy"))
-            .disabled(message.content.isEmpty)
-
-            iconButton("trash", L("msg.delete")) {
-                chatViewModel.deleteMessage(message)
-            }
-        }
-        .opacity(isHovering && !isEditing ? 1 : 0)
-        .disabled(!isHovering || isEditing)
-    }
-
-    private func iconButton(
-        _ systemImage: String,
-        _ help: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 10, weight: .medium))
-                .frame(width: 20, height: 14)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .help(help)
-    }
-
-    /// Copies the message and shows a short green checkmark on the button.
-    private func copyWithFeedback() {
-        chatViewModel.copyMessage(message)
-        guard !message.content.isEmpty else { return }
-
-        copyResetTask?.cancel()
-        withAnimation(.easeOut(duration: 0.12)) {
-            justCopied = true
-        }
-        copyResetTask = Task {
-            try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeIn(duration: 0.2)) {
-                justCopied = false
-            }
-        }
     }
 
     // MARK: - Attachment grid
@@ -1397,8 +1337,7 @@ private struct MessageBubble: View {
     @ViewBuilder
     private var avatar: some View {
         if message.role == .user,
-           let data = userProfileStore.avatarData,
-           let image = NSImage(data: data) {
+           let image = userProfileStore.avatarImage {
             Image(nsImage: image)
                 .resizable()
                 .scaledToFill()
@@ -1409,6 +1348,214 @@ private struct MessageBubble: View {
                 .font(.title3)
                 .foregroundStyle(message.role == .user ? appearance.accentColor : .purple)
                 .frame(width: 28, height: 28)
+        }
+    }
+}
+
+// MARK: - Message reply body
+
+/// The bubble *content* of a message: streamed plain text, rich Markdown, or a
+/// user bubble.
+///
+/// Extracted so it can be `.equatable()`-gated. Scrolling, hover transitions,
+/// sidebar refreshes and the token stream all re-evaluate `MessageList`, which
+/// re-creates every row's view value; without gating that re-runs MarkdownUI's
+/// parser and the `NSTextView` layout path for every visible message. Every
+/// input that can change the rendered result (text, role, streaming, font,
+/// theme, system appearance, colors) is part of the equality check — nothing is
+/// read implicitly except the chat view model, whose identity is stable for the
+/// lifetime of the window.
+private struct MessageReplyBody: View, Equatable {
+
+    /// Message text (the live content while streaming).
+    let content: String
+
+    /// Who wrote it — decides which rendering path (and styling) applies.
+    let role: ChatMessageRole
+
+    /// `true` while this assistant message is streaming.
+    let isStreaming: Bool
+
+    /// Resolved bubble background for this role / theme.
+    let bubbleColor: Color
+
+    /// Text color (only meaningful for the user bubble).
+    let textColor: Color
+
+    /// `AppearanceStore.renderIdentity` — font preset, size, theme, imported font.
+    let fontIdentity: String
+
+    /// Chat theme (Claude cream vs. system), used by inline-code tinting.
+    let theme: ChatTheme
+
+    /// System light/dark appearance, needed because dynamic colors resolve
+    /// differently per appearance even when the `Color` value is unchanged.
+    let colorScheme: ColorScheme
+
+    @EnvironmentObject private var appearance: AppearanceStore
+    @EnvironmentObject private var chatViewModel: ChatViewModel
+
+    static func == (lhs: MessageReplyBody, rhs: MessageReplyBody) -> Bool {
+        lhs.content == rhs.content
+            && lhs.role == rhs.role
+            && lhs.isStreaming == rhs.isStreaming
+            && lhs.fontIdentity == rhs.fontIdentity
+            && lhs.theme == rhs.theme
+            && lhs.colorScheme == rhs.colorScheme
+            && lhs.bubbleColor == rhs.bubbleColor
+            && lhs.textColor == rhs.textColor
+    }
+
+    var body: some View {
+        if role == .assistant && isStreaming {
+            // Keep partial replies cheap. Rich Markdown/LaTeX/code rendering is
+            // deferred until the stream has completed.
+            Text(content)
+                .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(bubbleColor)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .frame(maxWidth: 620, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if role == .assistant {
+            MarkdownText(
+                text: content,
+                fontSize: nil,
+                onQuote: { chatViewModel.quoteSelection($0) }
+            )
+                // Inner: let the markdown breathe to the full row.
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(bubbleColor)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                // Outer cap so long tables don't stretch the app.
+                .frame(maxWidth: 620, alignment: .leading)
+                // Never compress bubble height while streaming.
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text(content)
+                .appearanceFont(appearance.fontPreset, size: appearance.pointSize)
+                .foregroundStyle(textColor)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(bubbleColor)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .frame(maxWidth: 620, alignment: .trailing)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+// MARK: - Hover action area
+
+/// Pointer-over flag for a single message row.
+///
+/// Hover transitions happen *while* the list is scrolling (rows slide under a
+/// still pointer), so this is deliberately kept out of `MessageBubble`'s
+/// `@State`: only the tiny icon strip below observes it, and the bubble's
+/// Markdown body is `.equatable()`-gated, so a hover change costs one cheap
+/// header-row diff instead of re-rendering (and re-laying-out) the message text.
+private final class MessageHoverState: ObservableObject {
+    @Published var isHovering = false
+}
+
+/// Fixed-size action strip (edit/retry · copy · delete) that fades in on hover.
+///
+/// The strip always reserves its full width/height and is only hidden through
+/// `opacity`, so revealing the icons never reflows the header row — the row's
+/// vertical rhythm stays identical whether or not the pointer is over it.
+private struct MessageHoverActionArea: View {
+
+    /// Message the actions apply to.
+    let message: ChatMessage
+
+    /// `true` while this assistant message is streaming (retry is disabled).
+    let isStreaming: Bool
+
+    /// `true` while the inline editor is open (actions hide).
+    let isEditing: Bool
+
+    /// Shared per-row hover flag owned by `MessageBubble`.
+    @ObservedObject var hoverState: MessageHoverState
+
+    /// Switches the user bubble into inline-edit mode.
+    let onEdit: () -> Void
+
+    @EnvironmentObject private var chatViewModel: ChatViewModel
+
+    /// Short-lived "copied" feedback shown on the copy button.
+    @State private var justCopied = false
+    @State private var copyResetTask: Task<Void, Never>?
+
+    private var isVisible: Bool { hoverState.isHovering && !isEditing }
+
+    var body: some View {
+        HStack(spacing: 2) {
+            if message.role == .user {
+                iconButton("pencil", L("msg.edit"), action: onEdit)
+            } else {
+                iconButton("arrow.clockwise", L("msg.retry")) {
+                    chatViewModel.retryMessage(message)
+                }
+                .disabled(isStreaming)
+            }
+
+            Button {
+                copyWithFeedback()
+            } label: {
+                Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 10, weight: .medium))
+                    .frame(width: 20, height: 14)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(justCopied ? Color.green : Color.secondary)
+            .help(L(justCopied ? "msg.copied" : "msg.copy"))
+            .disabled(message.content.isEmpty)
+
+            iconButton("trash", L("msg.delete")) {
+                chatViewModel.deleteMessage(message)
+            }
+        }
+        .opacity(isVisible ? 1 : 0)
+        .disabled(!isVisible)
+        .onDisappear { copyResetTask?.cancel() }
+    }
+
+    /// Plain icon button — no border, no background, blends into the row.
+    private func iconButton(
+        _ systemImage: String,
+        _ help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .medium))
+                .frame(width: 20, height: 14)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help(help)
+    }
+
+    /// Copies the message and shows a short green checkmark on the button.
+    private func copyWithFeedback() {
+        chatViewModel.copyMessage(message)
+        guard !message.content.isEmpty else { return }
+
+        copyResetTask?.cancel()
+        withAnimation(.easeOut(duration: 0.12)) {
+            justCopied = true
+        }
+        copyResetTask = Task {
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: 0.2)) {
+                justCopied = false
+            }
         }
     }
 }
@@ -1656,11 +1803,29 @@ private struct MessageDetailView: View {
 
 // MARK: - Attachment thumbnail
 
+/// Decoded-thumbnail cache for image attachments.
+///
+/// `AttachmentThumbnail` used to read the file from disk and run `NSImage(data:)`
+/// on every body evaluation — with a few screenshots in the conversation that is
+/// megabytes of I/O + decode per list re-render, and it showed up as scroll jank.
+private enum AttachmentImageCache {
+    private static let cache = NSCache<NSUUID, NSImage>()
+
+    static func image(for attachment: ImageAttachment) -> NSImage? {
+        let key = attachment.id as NSUUID
+        if let hit = cache.object(forKey: key) { return hit }
+        guard let data = attachment.decodedData,
+              let image = NSImage(data: data) else { return nil }
+        cache.setObject(image, forKey: key)
+        return image
+    }
+}
+
 private struct AttachmentThumbnail: View {
     let attachment: ImageAttachment
 
     var body: some View {
-        if let data = attachment.decodedData, let image = NSImage(data: data) {
+        if let image = AttachmentImageCache.image(for: attachment) {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fit)

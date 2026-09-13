@@ -16,6 +16,21 @@ struct SelectableRichText: NSViewRepresentable {
     // MARK: - Coordinator（链接点击）
 
     final class Coordinator: NSObject, NSTextViewDelegate {
+
+        /// The exact attributed string instance currently installed in the text
+        /// view. `NSTextView` rewrites fonts during layout (a CJK fallback run
+        /// gains `NSOriginalFont` and swaps the font to PingFang/Songti), so a
+        /// round-trip comparison (`tv.attributedString() != attributed`) is
+        /// **always** unequal for mixed Chinese/Latin text — the old check made
+        /// every body re-render reinstall the whole string and re-layout the
+        /// whole message (~3.7 ms per row; 40 visible rows ≈ 150 ms per scroll
+        /// tick, i.e. the reported scroll stutter).
+        ///
+        /// `MarkdownText.plainCache` hands back the *same* instance for
+        /// identical content + font + theme, so an identity check is both exact
+        /// and free.
+        var appliedAttributed: NSAttributedString?
+
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
             if let url = link as? URL {
                 NSWorkspace.shared.open(url)
@@ -53,8 +68,9 @@ struct SelectableRichText: NSViewRepresentable {
 
     func updateNSView(_ tv: NSTextView, context: Context) {
         (tv as? QuoteTextView)?.onQuote = onQuote
-        if tv.attributedString() != attributed {
+        if context.coordinator.appliedAttributed !== attributed {
             tv.textStorage?.setAttributedString(attributed)
+            context.coordinator.appliedAttributed = attributed
         }
     }
 

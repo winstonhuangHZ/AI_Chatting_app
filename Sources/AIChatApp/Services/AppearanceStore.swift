@@ -326,6 +326,15 @@ final class AppearanceStore: ObservableObject {
         fontSizeLevel.markdownScale
     }
 
+    /// 正文渲染身份：任何一项变化都必须让消息气泡重新渲染。
+    ///
+    /// 消息正文是 `.equatable()` 门控的（滚动 / 悬停 / 流式输出引起的整列表
+    /// 重新求值会跳过没变的消息），所以这个字符串必须涵盖全部影响正文外观
+    /// 的设置：字体预设、字号、主题，以及导入的衬线字体族。
+    var renderIdentity: String {
+        "\(fontPreset.rawValue)|\(pointSize)|\(theme.rawValue)|\(FontPreset.importedSerifFamily ?? "-")"
+    }
+
     /// 根据备份恢复外观设置。
     func apply(from backup: BackupAppearance) {
         if let preset = FontPreset(rawValue: backup.fontPreset) {
