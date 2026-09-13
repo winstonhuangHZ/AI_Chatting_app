@@ -1543,8 +1543,14 @@ final class ChatViewModel: ObservableObject {
         )
 
         // Attach web-source references collected during the tool loop.
+        //
+        // Deduplicated by URL across *all* tool calls: the same engine can
+        // return the same five links for several queries in a row, and the
+        // Sources card used to repeat every block verbatim.
         if !collectedSources.isEmpty {
-            sessionStore.updateLastAssistantSources(collectedSources, in: sessionID)
+            var seenURLs = Set<String>()
+            let uniqueSources = collectedSources.filter { seenURLs.insert($0.url).inserted }
+            sessionStore.updateLastAssistantSources(uniqueSources, in: sessionID)
         }
 
         // Persist generation metadata for the message-info popover.

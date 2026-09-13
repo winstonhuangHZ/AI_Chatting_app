@@ -610,13 +610,21 @@ enum ChatTools {
         return try await WebSearch.search(query)
     }
 }
-// MARK: - Web search backend (zero-key Bing RSS + DuckDuckGo fallback)
+// MARK: - Web search backend (zero-key Bing / Brave / DuckDuckGo)
 
 /// Minimal web search without any API key.
 ///
-/// 1. DuckDuckGo Instant Answer API (structured JSON, often sparse).
-/// 2. Bing's RSS endpoint — reliable for programmatic clients without an API key.
-/// 3. DuckDuckGo HTML (kept as a final fallback; increasingly anti-bot).
+/// 1. DuckDuckGo HTML (POST/GET) — the user-selectable default.
+/// 2. Bing's RSS endpoint — answers most queries, but from some networks (VPN
+///    exits in the ja-JP market in particular) it silently answers a *different*
+///    query, e.g. `"Now and Then" Beatles final version …` coming back as
+///    dictionary pages for the single word "now". Everything it returns must
+///    therefore pass the relevance guard below.
+/// 3. Brave Search HTML — no API key needed and very accurate, but it only
+///    server-renders a couple of queries per IP before degrading to an empty
+///    JS shell, so it is rate-limited to a cooldown and used as a fallback.
+/// 4. DuckDuckGo Instant Answer API — sparse, but a solid last resort that
+///    still returns a real abstract when every listing engine fails.
 enum WebSearch {
 
     static func search(_ query: String, maxResults: Int = 5) async throws -> String {
@@ -641,29 +649,125 @@ enum WebSearch {
                 return result
             }
         }
+
+        // Last resort: a real (if sparse) abstract beats handing the model an
+        // empty result set, and it keeps "no results" from being the only
+        // outcome on a locked-down network.
+        if let instant = try? await instantAnswer(query, maxResults: maxResults),
+           !instant.isEmpty {
+            return instant
+        }
+
         return """
-        Web search returned no relevant results for "\(query)".
-        Check the search backend order in Settings → API → Web Search, or configure a real \
-        Search API key. If you use a proxy/VPN in TUN or fake-IP mode, its rules may be \
-        intercepting search-engine traffic.
+        Web search found no usable results for "\(query)": every configured backend either \
+        failed or returned results that did not match the query (search engines sometimes \
+        answer a *different* query from certain VPN/proxy exits).
+        Suggestions: retry with a shorter query that starts with the most distinctive word \
+        (e.g. `Beatles Now and Then chords` instead of a quoted phrase plus many keywords), \
+        or configure a search API key in Settings → API → Web Search.
         """
     }
 
     // MARK: Relevance guard
 
-    /// Reject result sets where the engine clearly searched only the first word
-    /// (e.g. "All My Loving …" returning dictionary pages for "all").
+    /// Reject result sets where the engine clearly answered something else.
+    ///
+    /// Two failure modes have to be caught:
+    /// 1. The engine searched only the first word — `All My Loving …` coming
+    ///    back as dictionary pages for "all".
+    /// 2. The engine answered an *unrelated* query entirely. Measured on this
+    ///    machine (ja-JP market, VPN exit): `"Now and Then" Beatles final
+    ///    version Paul McCartney replaced piano Lennon demo ostinato` came back
+    ///    as the same five "now"-dictionary pages every time, and the old
+    ///    2-token rule accepted them because "now" is in the titles and "then"
+    ///    happens to appear in a dictionary snippet.
+    ///
+    /// So a result set is only usable when
+    /// - at least one result contains ≥ 2 distinct query tokens (or all of them
+    ///   for very short queries), **and**
+    /// - a fourth of the query's tokens (2…4 of them) appear somewhere in the
+    ///   set, **and**
+    /// - the query's longest token (its most specific word — `mccartney`,
+    ///   `ostinato`, …) appears somewhere. Generic sets never do.
     private static func relevantResults(_ query: String, _ results: [ResultItem]) -> Bool {
         let tokens = queryTokens(query)
         guard !tokens.isEmpty else { return !results.isEmpty }
-        let required = min(2, tokens.count)
+        return verdict(for: tokens, in: results)
+    }
 
+    /// Shared by every backend: `tokens` is the already-tokenised query.
+    private static func verdict(for tokens: [String], in results: [ResultItem]) -> Bool {
+        let requiredInOneResult = min(2, tokens.count)
+        // A quarter of the query (2…4 tokens) must appear somewhere — never more
+        // than the query actually has, so one-word queries stay searchable.
+        let requiredOverall = min(
+            tokens.count,
+            min(max(2, Int((Double(tokens.count) * 0.25).rounded(.up))), 4)
+        )
+        let anchor = tokens.filter { $0.count >= 7 }.max { $0.count < $1.count }
+
+        var matched = Set<String>()
+        var sawStrongResult = false
         for result in results {
             let haystack = (result.title + " " + result.snippet + " " + result.url).lowercased()
-            let hits = tokens.filter { haystack.contains($0) }.count
-            if hits >= required { return true }
+            let hits = tokens.filter { haystack.contains($0) }
+            matched.formUnion(hits)
+            if hits.count >= requiredInOneResult { sawStrongResult = true }
         }
-        return false
+
+        guard sawStrongResult, matched.count >= requiredOverall else { return false }
+        if let anchor, !matched.contains(anchor) { return false }
+        return true
+    }
+
+    /// Query rewrites tried (in order) when the guard rejects a result set.
+    ///
+    /// Engines key hard on the leading token: a query that opens with an
+    /// ambiguous phrase (`"Now and Then" Beatles …`) can be answered as
+    /// dictionary pages for "now", while the same words with the proper noun
+    /// first (`Beatles "Now and Then" …`) return the intended pages. Strip
+    /// quotes and truncate as further escape hatches.
+    private static func queryVariants(_ query: String) -> [String] {
+        var variants: [String] = [query]
+
+        func add(_ candidate: String) {
+            let trimmed = candidate
+                .replacingOccurrences(of: "  ", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !variants.contains(trimmed) else { return }
+            variants.append(trimmed)
+        }
+
+        // 1. Proper noun first: the first capitalised, non-initial, unquoted word
+        //    ("Beatles", "Peter", "Lennon" …), preferring the longest one.
+        var words: [String] = query.split(separator: " ").map(String.init)
+        var inQuotes = false
+        var candidates: [String] = []
+        for (index, word) in words.enumerated() {
+            let opensQuote = word.contains("\"") || word.hasPrefix("“")
+            if index > 0, !inQuotes, !opensQuote,
+               let first = word.first, first.isLetter, first.isUppercase,
+               word.count >= 4 {
+                candidates.append(word)
+            }
+            if word.contains("\"") || word.hasPrefix("“") { inQuotes.toggle() }
+        }
+        if let anchor = candidates.max(by: { $0.count < $1.count }),
+           let index = words.firstIndex(of: anchor) {
+            words.remove(at: index)
+            add(([anchor] + words).joined(separator: " "))
+        }
+
+        // 2. Same query without quotation marks (many engines handle quoted
+        //    phrases much worse than the raw words when mixed with keywords).
+        add(query.replacingOccurrences(of: "\"", with: ""))
+
+        // 3. Leading keywords only — long tails are what the engines drop.
+        if words.count > 5 {
+            add(words.prefix(5).joined(separator: " "))
+        }
+
+        return Array(variants.prefix(3))
     }
 
     private static let searchStopWords: Set<String> = [
@@ -714,8 +818,14 @@ enum WebSearch {
         case .bing:
             return try await bingSearch(query, maxResults: maxResults)
         case .brave:
-            guard !configuration.apiKey.isEmpty else {
-                return forced ? "Error: Brave Search selected, but no search API key is configured." : nil
+            // A key upgrades this to Brave's official API; without one we fall
+            // back to crawling Brave's HTML results (accurate, but only a
+            // couple of queries per IP before it degrades — hence the cooldown).
+            if configuration.apiKey.isEmpty {
+                if forced, braveCooldownActive {
+                    return "Error: Brave Search is rate-limited right now and no API key is configured."
+                }
+                return try await braveHTMLSearch(query, maxResults: maxResults)
             }
             return try await brave(query, key: configuration.apiKey, maxResults: maxResults)
         case .serper:
@@ -738,7 +848,12 @@ enum WebSearch {
 
     private static func format(_ query: String, _ results: [ResultItem]) -> String {
         guard !results.isEmpty else { return "" }
-        var output = "Web search results for \"\(query)\":\n"
+        return "Web search results for \"\(query)\":\n" + formatItems(results)
+    }
+
+    /// `1. Title / snippet / url` blocks — the shape `parseSources` reads back.
+    private static func formatItems(_ results: [ResultItem]) -> String {
+        var output = ""
         for (index, result) in results.enumerated() {
             output += "\(index + 1). \(result.title)\n   \(result.snippet)\n   \(result.url)\n"
         }
@@ -885,7 +1000,10 @@ enum WebSearch {
 
     // MARK: Instant Answer API
 
-    private static func instantAnswer(_ query: String) async throws -> String {
+    /// DuckDuckGo's Instant Answer API: sparse, but it answers entity/topic
+    /// questions with real prose (and a real URL) even on networks where every
+    /// listing engine is blocked or misbehaving. Used as the last resort.
+    private static func instantAnswer(_ query: String, maxResults: Int) async throws -> String {
         guard var components = URLComponents(string: "https://api.duckduckgo.com/") else { return "" }
         components.queryItems = [
             URLQueryItem(name: "q", value: query),
@@ -904,37 +1022,91 @@ enum WebSearch {
             return ""
         }
 
-        var lines: [String] = []
+        let heading = (object["Heading"] as? String) ?? ""
+        var results: [ResultItem] = []
+
         if let answer = object["Answer"] as? String, !answer.isEmpty {
-            lines.append("Answer: \(answer)")
+            results.append(ResultItem(
+                title: heading.isEmpty ? "Instant answer" : heading,
+                snippet: answer,
+                url: (object["AbstractURL"] as? String) ?? "https://duckduckgo.com/?q=\(query)"
+            ))
         }
-        if let abstract = object["AbstractText"] as? String, !abstract.isEmpty {
-            lines.append(abstract)
-            if let url = object["AbstractURL"] as? String {
-                lines.append(url)
-            }
+        if let abstract = object["AbstractText"] as? String, !abstract.isEmpty,
+           let url = object["AbstractURL"] as? String, !url.isEmpty {
+            results.append(ResultItem(
+                title: heading.isEmpty ? url : heading,
+                snippet: abstract,
+                url: url
+            ))
         }
         if let topics = object["RelatedTopics"] as? [[String: Any]] {
-            for topic in topics.prefix(3) {
-                if let text = topic["Text"] as? String, !text.isEmpty {
-                    lines.append(text)
-                    if let url = topic["FirstURL"] as? String {
-                        lines.append(url)
-                    }
-                }
+            for topic in topics {
+                guard let text = topic["Text"] as? String, !text.isEmpty,
+                      let url = topic["FirstURL"] as? String, !url.isEmpty,
+                      // Category links ("duckduckgo.com/c/…") are navigation
+                      // aids, not references worth citing.
+                      !url.contains("duckduckgo.com/c/") else { continue }
+                let title = url.split(separator: "/").last.map { $0.replacingOccurrences(of: "_", with: " ") } ?? ""
+                results.append(ResultItem(title: String(title), snippet: text, url: url))
+                if results.count >= maxResults { break }
             }
         }
-        return lines.joined(separator: "\n")
+
+        guard !results.isEmpty else { return "" }
+        // No relevance guard here: this index is curated, and a partial match is
+        // still far more useful than an empty context. It is labelled so the
+        // model knows these are summaries, not a ranked result list.
+        return "DuckDuckGo reference summary for \"\(query)\" "
+            + "(ranked result list unavailable on this network):\n"
+            + formatItems(Array(results.prefix(maxResults)))
     }
 
     // MARK: HTML results
 
+    /// Runs `fetch` for the query and, when the relevance guard rejects the
+    /// result set, for reformulated variants of it. Returns the first usable
+    /// set formatted for the model (echoing the *original* query, so the model
+    /// sees a stable thread), or `nil` when nothing usable came back.
+    private static func firstRelevantSet(
+        _ query: String,
+        maxResults: Int,
+        fetch: (String) async throws -> [ResultItem]
+    ) async throws -> String? {
+        var consecutiveEmptyResponses = 0
+        for variant in queryVariants(query) {
+            let items = try await fetch(variant)
+            guard !items.isEmpty else {
+                // An empty payload means the engine blocked us or has nothing
+                // at all — retrying further rewrites only burns time.
+                consecutiveEmptyResponses += 1
+                if consecutiveEmptyResponses >= 2 { return nil }
+                continue
+            }
+            consecutiveEmptyResponses = 0
+            let tokens = queryTokens(variant)
+            guard !tokens.isEmpty, verdict(for: tokens, in: items) else { continue }
+
+            var seenURLs = Set<String>()
+            let unique = items.filter { seenURLs.insert($0.url).inserted }
+            return format(query, Array(unique.prefix(maxResults)))
+        }
+        return nil
+    }
+
     /// Bing's RSS endpoint is far more stable for programmatic clients than
     /// scraping DuckDuckGo's HTML (which now returns an empty anti-bot page to
     /// URLSession). Parsed with a small XML regex because the payload is tiny.
-    private static func bingSearch(_ query: String, maxResults: Int) async throws -> String {
+    private static func bingSearch(_ query: String, maxResults: Int) async throws -> String? {
+        try await firstRelevantSet(query, maxResults: maxResults) { variant in
+            try await bingFeed(variant, maxResults: maxResults)
+        }
+    }
+
+    /// One Bing RSS request (no relevance filtering — see `firstRelevantSet`).
+    private static func bingFeed(_ query: String, maxResults: Int) async throws -> [ResultItem] {
         guard var components = URLComponents(string: "https://www.bing.com/search") else {
-            return ""
+            return []
         }
         components.queryItems = [
             URLQueryItem(name: "q", value: query),
@@ -954,7 +1126,7 @@ enum WebSearch {
               (200..<300).contains(http.statusCode),
               let xml = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .isoLatin1) else {
-            return ""
+            return []
         }
 
         let items = matches(in: xml, pattern: #"(?is)<item>(.*?)</item>"#)
@@ -972,14 +1144,7 @@ enum WebSearch {
             guard !url.isEmpty, !title.isEmpty else { continue }
             results.append(ResultItem(title: title, snippet: snippet, url: url))
         }
-        guard !results.isEmpty else { return "" }
-        guard relevantResults(query, results) else { return "" }
-
-        var output = "Web search results for \"\(query)\":\n"
-        for (index, result) in results.enumerated() {
-            output += "\(index + 1). \(result.title)\n   \(result.snippet)\n   \(result.url)\n"
-        }
-        return output
+        return results
     }
 
     private static func matches(in text: String, pattern: String) -> [String] {
@@ -1006,9 +1171,18 @@ enum WebSearch {
         let url: String
     }
 
-    private static func htmlSearch(_ query: String, maxResults: Int) async throws -> String {
+    private static func htmlSearch(_ query: String, maxResults: Int) async throws -> String? {
+        try await firstRelevantSet(query, maxResults: maxResults) { variant in
+            try await duckDuckGoHTML(variant, maxResults: maxResults)
+        }
+    }
+
+    /// One DuckDuckGo HTML request. Returns an empty array when DuckDuckGo
+    /// answers with its anti-bot page (which is what happens from many VPN /
+    /// datacenter exits) instead of results.
+    private static func duckDuckGoHTML(_ query: String, maxResults: Int) async throws -> [ResultItem] {
         guard var components = URLComponents(string: "https://html.duckduckgo.com/html/") else {
-            return "Search failed: invalid URL."
+            return []
         }
         components.queryItems = [URLQueryItem(name: "q", value: query)]
 
@@ -1023,32 +1197,98 @@ enum WebSearch {
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode),
               let html = String(data: data, encoding: .utf8) else {
-            return "Search failed: no results."
+            return []
+        }
+        return parseResults(from: html, maxResults: maxResults)
+    }
+
+    // MARK: Brave (no API key)
+
+    /// Brave answers with server-rendered results only for the first couple of
+    /// queries from an IP; after that it returns a small JS-only shell. Remember
+    /// that so the agent loop does not waste a second per call on a dead end.
+    private static let braveCooldownLock = NSLock()
+    private static var braveBlockedUntil: Date?
+
+    private static var braveCooldownActive: Bool {
+        braveCooldownLock.lock()
+        defer { braveCooldownLock.unlock() }
+        guard let until = braveBlockedUntil else { return false }
+        return until > Date()
+    }
+
+    private static func noteBraveRateLimit() {
+        braveCooldownLock.lock()
+        braveBlockedUntil = Date().addingTimeInterval(10 * 60)
+        braveCooldownLock.unlock()
+    }
+
+    private static func braveHTMLSearch(_ query: String, maxResults: Int) async throws -> String? {
+        guard !braveCooldownActive else { return "" }
+        return try await firstRelevantSet(query, maxResults: maxResults) { variant in
+            try await braveHTML(variant, maxResults: maxResults)
+        }
+    }
+
+    /// One Brave Search HTML request, parsed from its `result-body` blocks.
+    private static func braveHTML(_ query: String, maxResults: Int) async throws -> [ResultItem] {
+        guard var components = URLComponents(string: "https://search.brave.com/search") else {
+            return []
+        }
+        components.queryItems = [URLQueryItem(name: "q", value: query)]
+
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 20
+        request.setValue(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            forHTTPHeaderField: "User-Agent"
+        )
+        request.setValue("text/html", forHTTPHeaderField: "Accept")
+        request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode),
+              let html = String(data: data, encoding: .utf8) else {
+            return []
         }
 
-        let results = parseResults(from: html, maxResults: maxResults)
-        guard !results.isEmpty else {
-            return ""
-        }
-        guard relevantResults(query, results) else {
-            return ""
+        let blocks = html.components(separatedBy: #"<div class="result-body"#).dropFirst()
+        if blocks.isEmpty {
+            // Brave served its ~74 KB JS-only shell instead of a ~230 KB
+            // server-rendered page: this IP is being rate-limited.
+            if html.count < 120_000 { noteBraveRateLimit() }
+            return []
         }
 
-        var output = "Web search results for \"\(query)\":\n"
-        for (index, result) in results.enumerated() {
-            output += "\(index + 1). \(result.title)\n   \(result.snippet)\n   \(result.url)\n"
+        var results: [ResultItem] = []
+        for block in blocks.prefix(maxResults * 2) {
+            guard let url = extract(block, from: #"<a href=""#, to: "\"")
+                .map(decodeHTML),
+                url.hasPrefix("http"),
+                !url.contains("search.brave.com") else { continue }
+            let title = extract(block, from: #"<div class="title[^"]*"[^>]*>"#, to: "</div>")
+                .map { stripTags(decodeHTML($0)) } ?? ""
+            let snippet = extract(block, from: #"<div class="snippet [^"]*"[^>]*>"#, to: "</div>")
+                .map { stripTags(decodeHTML($0)) } ?? ""
+            guard !title.isEmpty else { continue }
+            results.append(ResultItem(title: title, snippet: snippet, url: url))
+            if results.count >= maxResults { break }
         }
-        return output
+        return results
     }
 
     private static func parseResults(from html: String, maxResults: Int) -> [ResultItem] {
         let blocks = html.components(separatedBy: #"<div class="result "#).dropFirst()
         var results: [ResultItem] = []
         for block in blocks.prefix(maxResults) {
+            // `decodeHTML` only unwraps entities and one tag; DDG highlights
+            // query words with <b>…</b> runs, so strip tags afterwards or the
+            // model (and the Sources card) receives raw markup.
             let title = extract(block, from: #"class="result__a"[^>]*>"#, to: "</a>")
-                .map(decodeHTML) ?? ""
+                .map { stripTags(decodeHTML($0)) } ?? ""
             let snippet = extract(block, from: #"class="result__snippet"[^>]*>"#, to: "</a>")
-                .map(decodeHTML) ?? ""
+                .map { stripTags(decodeHTML($0)) } ?? ""
             let url = extract(block, from: #"class="result__a" href="[^"]+"#, to: "\"")
                 .map { raw -> String in
                     // DDG wraps real URLs in `//duckduckgo.com/l/?uddg=<encoded>`.
@@ -1170,7 +1410,9 @@ enum WebPageReader {
     }
 
     /// Parses the leading `Page: <url>` line of a `read()` result into a source
-    /// item (title = host, since the page's own title is not extracted).
+    /// item. The page's own `<title>` is the first non-empty line of the body
+    /// (`extractText` emits it before the body copy), so the Sources card shows
+    /// the article name instead of a bare host such as `en.wikipedia.org`.
     static func parseSource(from result: String) -> [ChatSource] {
         let lines = result.components(separatedBy: .newlines)
         guard let first = lines.first, first.hasPrefix("Page: ") else { return [] }
@@ -1178,7 +1420,14 @@ enum WebPageReader {
             .trimmingCharacters(in: .whitespaces)
         guard let parsed = URL(string: url),
               parsed.scheme == "http" || parsed.scheme == "https" else { return [] }
-        return [ChatSource(title: parsed.host ?? url, url: url)]
+
+        let pageTitle = lines
+            .dropFirst()
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { line in
+                (3...140).contains(line.count) && !line.hasPrefix("http")
+            }
+        return [ChatSource(title: pageTitle ?? parsed.host ?? url, url: url)]
     }
 
     /// Strips script/style, removes tags, decodes entities, collapses whitespace.
