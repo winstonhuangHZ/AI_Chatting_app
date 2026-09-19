@@ -388,18 +388,22 @@ struct SidebarView: View {
 
     /// Exports one session to PDF, surfacing failures in the chat error banner.
     private func exportPDF(_ session: ChatSession) {
-        do {
-            chatViewModel.ensureMessagesLoaded(for: session)
-            if let url = try PDFExportService.export(
-                session: session,
-                appearance: appearance,
-                localization: localization
-            ) {
-                // Reveal the file so the user gets immediate confirmation.
-                NSWorkspace.shared.activateFileViewerSelecting([url])
+        chatViewModel.ensureMessagesLoaded(for: session)
+        // 导出会在保存面板之后先把回答里的网络图片下载进缓存，再逐块渲染 PDF，
+        // 所以整体是异步的（面板本身仍在主线程弹出）。
+        Task {
+            do {
+                if let url = try await PDFExportService.export(
+                    session: session,
+                    appearance: appearance,
+                    localization: localization
+                ) {
+                    // Reveal the file so the user gets immediate confirmation.
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                }
+            } catch {
+                chatViewModel.errorMessage = error.localizedDescription
             }
-        } catch {
-            chatViewModel.errorMessage = error.localizedDescription
         }
     }
 }

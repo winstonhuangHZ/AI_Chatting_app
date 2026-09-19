@@ -71,6 +71,8 @@ struct BackupAppearance: Codable {
     var fontPreset: String
     var fontSizeLevel: Int
     var theme: String? = nil
+    /// 是否渲染回答里的网络图片（旧备份里没有这个键 → nil → 保持当前设置）。
+    var rendersRemoteImages: Bool? = nil
 }
 
 /// 数据导出/导入服务（纯 Foundation，无第三方依赖）。

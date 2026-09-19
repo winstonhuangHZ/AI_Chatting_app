@@ -85,6 +85,19 @@ struct AppearancePickerView: View {
             .frame(maxWidth: 280)
             .tint(appearance.accentColor)
 
+            // 网络图片：模型在回答里写 `![描述](https://…)` 时是否直接下载显示。
+            Toggle(L("appearance.images.render"), isOn: $appearance.rendersRemoteImages)
+                .toggleStyle(.switch)
+                .frame(maxWidth: 320, alignment: .leading)
+                .tint(appearance.accentColor)
+                .padding(.top, 4)
+
+            Text(L("appearance.images.hint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 420, alignment: .leading)
+
             // 字号预览（跟随当前预设，默认 sans）。
             Text(L("appearance.sample"))
                 .appearanceFont(appearance.fontPreset, size: appearance.pointSize)

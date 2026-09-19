@@ -180,6 +180,7 @@ final class AppearanceStore: ObservableObject {
     private static let presetKey = "appearance.fontPreset"
     private static let sizeKey = "appearance.fontSizeLevel"
     private static let themeKey = "appearance.theme"
+    private static let remoteImagesKey = "appearance.rendersRemoteImages"
 
     // MARK: - Claude palette
     //
@@ -234,6 +235,15 @@ final class AppearanceStore: ObservableObject {
         didSet { persist() }
     }
 
+    /// 是否渲染模型回答里的网络图片（Markdown `![描述](https://…)`）。
+    ///
+    /// 默认开启：模型给出的图片链接直接下载并显示在回答里。关闭后同一位置显示
+    /// 一个「图片已隐藏」提示条，仍可点开原图——图片请求会暴露本机 IP 给图床，
+    /// 所以给用户一个彻底关掉的开关（设置 → 外观）。
+    @Published var rendersRemoteImages: Bool {
+        didSet { persist() }
+    }
+
     // MARK: - Initializers
 
     init() {
@@ -258,6 +268,13 @@ final class AppearanceStore: ObservableObject {
             self.theme = theme
         } else {
             self.theme = .system
+        }
+
+        // 默认开启：`bool(forKey:)` 对未写入过的键返回 false，因此先看键是否存在。
+        if defaults.object(forKey: Self.remoteImagesKey) == nil {
+            rendersRemoteImages = true
+        } else {
+            rendersRemoteImages = defaults.bool(forKey: Self.remoteImagesKey)
         }
     }
 
@@ -333,6 +350,7 @@ final class AppearanceStore: ObservableObject {
     /// 的设置：字体预设、字号、主题，以及导入的衬线字体族。
     var renderIdentity: String {
         "\(fontPreset.rawValue)|\(pointSize)|\(theme.rawValue)|\(FontPreset.importedSerifFamily ?? "-")"
+            + "|\(rendersRemoteImages)"
     }
 
     /// 根据备份恢复外观设置。
@@ -346,6 +364,9 @@ final class AppearanceStore: ObservableObject {
         if let rawTheme = backup.theme,
            let restoredTheme = ChatTheme(rawValue: rawTheme) {
             theme = restoredTheme
+        }
+        if let renderImages = backup.rendersRemoteImages {
+            rendersRemoteImages = renderImages
         }
     }
 
@@ -362,6 +383,7 @@ final class AppearanceStore: ObservableObject {
         defaults.set(fontPreset.rawValue, forKey: Self.presetKey)
         defaults.set(fontSizeLevel.rawValue, forKey: Self.sizeKey)
         defaults.set(theme.rawValue, forKey: Self.themeKey)
+        defaults.set(rendersRemoteImages, forKey: Self.remoteImagesKey)
         defaults.synchronize()
     }
 }

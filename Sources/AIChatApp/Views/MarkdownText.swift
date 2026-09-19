@@ -174,9 +174,17 @@ struct MarkdownText: View {
             baseURL: nil
         )
         // Math is smuggled through the parser as `aichatmath://` image URLs;
-        // these providers turn them back into rendered LaTeX.
-        .markdownImageProvider(MathBlockImageProvider(fontSize: effectiveFontSize))
-        .markdownInlineImageProvider(MathInlineImageProvider(fontSize: effectiveFontSize))
+        // these providers turn them back into rendered LaTeX, and also render
+        // the network images the model writes as `![alt](https://…)` markdown
+        // (setting: Appearance → “render images from model replies”).
+        .markdownImageProvider(MediaBlockImageProvider(
+            fontSize: effectiveFontSize,
+            rendersRemoteImages: appearance.rendersRemoteImages
+        ))
+        .markdownInlineImageProvider(MediaInlineImageProvider(
+            fontSize: effectiveFontSize,
+            rendersRemoteImages: appearance.rendersRemoteImages
+        ))
         .markdownCodeSyntaxHighlighter(ThemeCodeSyntaxHighlighter())
         .markdownTextStyle {
             FontSize(effectiveFontSize)

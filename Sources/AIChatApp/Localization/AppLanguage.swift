@@ -245,6 +245,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "system.prompt": "System Prompt",
         "system.prompt.hint": "System prompt is sent before each chat; told the model Markdown is rendered.",
         "system.prompt.footer": "Edit freely — e.g. set the assistant's role/persona.",
+        "system.prompt.preview": "Preview the prompt actually sent (including the notes the app adds)",
         "models": "Models",
         "selected.model": "Selected Model",
         "no.models.yet": "No models yet",
@@ -295,6 +296,13 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "appearance.size.medium": "Medium",
         "appearance.size.large": "Large",
         "appearance.size.xlarge": "Extra Large",
+        "appearance.images.render": "Render images from model replies",
+        "appearance.images.hint": "When on, Markdown images the model writes — ![alt](https://…) — are downloaded and shown inline. The request goes straight to the image host, which can see your IP. When off, a small chip lets you open them manually.",
+        "image.loading": "Loading image…",
+        "image.failed": "Image failed to load",
+        "image.hidden": "Image hidden",
+        "image.open": "Open",
+        "image.retry": "Retry",
         "backup.title": "Backup & Restore",
         "backup.description": "Export all data (chats, API profiles, user profile, appearance, language) as a ZIP. Import it on another machine to restore everything.",
         "backup.export": "Export Backup…",
@@ -503,6 +511,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "system.prompt": "系统提示",
         "system.prompt.hint": "每次聊天前发送的系统提示；已告知模型应用会渲染 Markdown。",
         "system.prompt.footer": "可自由编辑——例如设置助手的角色/人格。",
+        "system.prompt.preview": "查看实际发送的完整提示词（含应用自动追加的说明）",
         "models": "模型",
         "selected.model": "已选模型",
         "no.models.yet": "暂无模型",
@@ -552,6 +561,13 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "appearance.size.medium": "中",
         "appearance.size.large": "大",
         "appearance.size.xlarge": "特大",
+        "appearance.images.render": "渲染回答中的网络图片",
+        "appearance.images.hint": "开启后，模型在回答里写的 Markdown 图片（![描述](https://…)）会直接下载并显示在气泡里。图片请求直接发往图床，对方能看到你的 IP；关闭时该位置只显示一条可手动打开的提示。",
+        "image.loading": "正在加载图片…",
+        "image.failed": "图片加载失败",
+        "image.hidden": "图片已隐藏",
+        "image.open": "打开",
+        "image.retry": "重试",
         "backup.export.choose_format": "选择导出格式",
         "backup.import.choose_format": "选择导入格式",
         "backup.format.zip": "ZIP 压缩包（可读）",
@@ -667,6 +683,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "system.prompt": "Prompt système",
         "system.prompt.hint": "Envoyé avant chaque discussion ; informe le modèle que le Markdown est rendu.",
         "system.prompt.footer": "Modifiable librement — p. ex. définir le rôle/persona de l'assistant.",
+        "system.prompt.preview": "Aperçu du prompt réellement envoyé (notes ajoutées par l'app incluses)",
         "models": "Modèles",
         "selected.model": "Modèle sélectionné",
         "no.models.yet": "Aucun modèle",
@@ -702,7 +719,14 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "appearance.size.small": "Petite",
         "appearance.size.medium": "Moyenne",
         "appearance.size.large": "Grande",
-        "appearance.size.xlarge": "Extra large"
+        "appearance.size.xlarge": "Extra large",
+        "appearance.images.render": "Afficher les images des réponses",
+        "appearance.images.hint": "Activé, les images Markdown écrites par le modèle — ![alt](https://…) — sont téléchargées et affichées. La requête part directement vers le site de l'image, qui voit votre IP. Désactivé, une petite étiquette permet de l'ouvrir manuellement.",
+        "image.loading": "Chargement de l'image…",
+        "image.failed": "Échec du chargement de l'image",
+        "image.hidden": "Image masquée",
+        "image.open": "Ouvrir",
+        "image.retry": "Réessayer"
     ]
 
     // MARK: - 西班牙语
@@ -814,6 +838,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "system.prompt": "Prompt del sistema",
         "system.prompt.hint": "Se envía antes de cada chat; informa al modelo de que Markdown se renderiza.",
         "system.prompt.footer": "Edite libremente — p. ej. defina el rol/persona del asistente.",
+        "system.prompt.preview": "Ver el prompt que se envía realmente (incluidas las notas que añade la app)",
         "models": "Modelos",
         "selected.model": "Modelo seleccionado",
         "no.models.yet": "Aún sin modelos",
@@ -849,7 +874,14 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "appearance.size.small": "Pequeño",
         "appearance.size.medium": "Medio",
         "appearance.size.large": "Grande",
-        "appearance.size.xlarge": "Extra grande"
+        "appearance.size.xlarge": "Extra grande",
+        "appearance.images.render": "Mostrar imágenes de las respuestas",
+        "appearance.images.hint": "Activado, las imágenes Markdown que escribe el modelo — ![alt](https://…) — se descargan y se muestran. La petición va directamente al sitio de la imagen, que ve tu IP. Desactivado, una pequeña etiqueta permite abrirla manualmente.",
+        "image.loading": "Cargando imagen…",
+        "image.failed": "No se pudo cargar la imagen",
+        "image.hidden": "Imagen oculta",
+        "image.open": "Abrir",
+        "image.retry": "Reintentar"
     ]
 
     // MARK: - 俄语
@@ -961,6 +993,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "system.prompt": "Системный промпт",
         "system.prompt.hint": "Отправляется перед каждым чатом; сообщает модели, что Markdown рендерится.",
         "system.prompt.footer": "Можно редактировать — например, задать роль/персону ассистента.",
+        "system.prompt.preview": "Показать реально отправляемый промпт (включая добавленные приложением заметки)",
         "models": "Модели",
         "selected.model": "Выбранная модель",
         "no.models.yet": "Моделей пока нет",
@@ -996,7 +1029,14 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "appearance.size.small": "Мелкий",
         "appearance.size.medium": "Средний",
         "appearance.size.large": "Крупный",
-        "appearance.size.xlarge": "Очень крупный"
+        "appearance.size.xlarge": "Очень крупный",
+        "appearance.images.render": "Показывать изображения из ответов",
+        "appearance.images.hint": "Когда включено, изображения Markdown из ответа модели — ![alt](https://…) — скачиваются и показываются. Запрос идёт напрямую к сайту изображения, который видит ваш IP. Когда выключено, остаётся небольшая плашка, позволяющая открыть изображение вручную.",
+        "image.loading": "Загрузка изображения…",
+        "image.failed": "Не удалось загрузить изображение",
+        "image.hidden": "Изображение скрыто",
+        "image.open": "Открыть",
+        "image.retry": "Повторить"
     ]
 
     // MARK: - 阿拉伯语
@@ -1108,6 +1148,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "system.prompt": "موجه النظام",
         "system.prompt.hint": "يُرسل قبل كل محادثة؛ يُعلم النموذج أن Markdown يُعرض.",
         "system.prompt.footer": "حرر بحرية — مثلًا اضبط دور/شخصية المساعد.",
+        "system.prompt.preview": "معاينة المُوجّه المُرسَل فعليًا (مع الملاحظات التي يضيفها التطبيق)",
         "models": "النماذج",
         "selected.model": "النموذج المحدد",
         "no.models.yet": "لا توجد نماذج بعد",
@@ -1143,7 +1184,14 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "appearance.size.small": "صغير",
         "appearance.size.medium": "متوسط",
         "appearance.size.large": "كبير",
-        "appearance.size.xlarge": "كبير جدًا"
+        "appearance.size.xlarge": "كبير جدًا",
+        "appearance.images.render": "عرض الصور الواردة في الردود",
+        "appearance.images.hint": "عند التشغيل تُنزَّل صور Markdown التي يكتبها النموذج — ![alt](https://…) — وتُعرض داخل الرد، ويذهب الطلب مباشرةً إلى موقع الصورة الذي يرى عنوان IP الخاص بك. عند الإيقاف يظهر شريط صغير يتيح فتحها يدويًا.",
+        "image.loading": "جارٍ تحميل الصورة…",
+        "image.failed": "تعذّر تحميل الصورة",
+        "image.hidden": "الصورة مخفية",
+        "image.open": "فتح",
+        "image.retry": "إعادة المحاولة"
     ]
 }
 

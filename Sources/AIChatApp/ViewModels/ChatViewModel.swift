@@ -267,7 +267,15 @@ final class ChatViewModel: ObservableObject {
     - Write in the same language the interview used (Chinese unless the user wrote another language).
     """
 
-    private func buildSystemPrompt(for config: APIServerConfig, personalizationCollection: Bool = false) -> String {
+    /// 实际发送给模型的 system prompt：profile 里保存的原文 + 应用自动追加的说明。
+    ///
+    /// 追加部分是**按请求临时拼接**的，不会写回 profile，所以设置里的文本始终是
+    /// 用户自己编辑的那份；这个方法既给请求路径用，也给设置里的「实际发送内容」
+    /// 预览用（见 `SystemPromptPreview`）。
+    static func effectiveSystemPrompt(
+        for config: APIServerConfig,
+        personalizationCollection: Bool = false
+    ) -> String {
         // 知识采集会话：用采集专用 prompt，不叠加普通 personalization 指令。
         if personalizationCollection {
             return Self.personalizationCollectionPrompt
@@ -330,6 +338,20 @@ final class ChatViewModel: ObservableObject {
             value as ground truth. Never guess or fabricate a time.
             """
         }
+
+        // 渐进增强：告知模型可以按 Markdown 图片语法直接把图片交给用户看
+        // （客户端会下载并渲染 `![描述](https://…)`；见 MediaBlockImageProvider）。
+        let imageMarker = "IMAGE URLS:"
+        if !prompt.contains(imageMarker) {
+            prompt += """
+
+            IMAGE URLS: To show a picture, write standard Markdown image syntax on \
+            its own line, e.g. ![short description](https://example.com/photo.png). \
+            Only real, publicly reachable http(s) image URLs are rendered — never \
+            invent, guess or fabricate a URL, and never wrap the image in a code block.
+            """
+        }
+
         // Lightweight human-in-the-loop (Agent mode only).
         let askMarker = "ASK_USER TOOL"
         if config.toolsEnabled && !prompt.contains(askMarker) {
@@ -953,7 +975,7 @@ final class ChatViewModel: ObservableObject {
         var history = activeSession?.messages
             .filter { !$0.content.isEmpty || !$0.attachments.isEmpty || !$0.documentAttachments.isEmpty } ?? []
 
-        let systemPrompt = buildSystemPrompt(for: config, personalizationCollection: activeSession?.isPersonalizationCollection == true)
+        let systemPrompt = Self.effectiveSystemPrompt(for: config, personalizationCollection: activeSession?.isPersonalizationCollection == true)
         history.insert(.system(systemPrompt), at: 0)
 
         if let context = buildContextMessage(for: config, personalizationCollection: activeSession?.isPersonalizationCollection == true) {
@@ -1006,7 +1028,7 @@ final class ChatViewModel: ObservableObject {
                     && (!$0.content.isEmpty || !$0.attachments.isEmpty || !$0.documentAttachments.isEmpty)
             } ?? []
 
-        let systemPrompt = buildSystemPrompt(for: config, personalizationCollection: activeSession?.isPersonalizationCollection == true)
+        let systemPrompt = Self.effectiveSystemPrompt(for: config, personalizationCollection: activeSession?.isPersonalizationCollection == true)
         history.insert(.system(systemPrompt), at: 0)
 
         // 动态偏好 JSON 紧跟 system prompt 放在最前：上一轮请求的完整
@@ -1098,7 +1120,7 @@ final class ChatViewModel: ObservableObject {
         var history = activeSession?.messages
             .filter { !$0.content.isEmpty || !$0.attachments.isEmpty || !$0.documentAttachments.isEmpty } ?? []
 
-        let systemPrompt = buildSystemPrompt(for: config, personalizationCollection: activeSession?.isPersonalizationCollection == true)
+        let systemPrompt = Self.effectiveSystemPrompt(for: config, personalizationCollection: activeSession?.isPersonalizationCollection == true)
         history.insert(.system(systemPrompt), at: 0)
 
         // 动态偏好 JSON 紧跟 system prompt 放在最前：上一轮请求的完整

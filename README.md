@@ -17,6 +17,7 @@ macOS 原生 AI 聊天桌面应用：支持 OpenAI Chat Completions 兼容接口
   - 系统截图（`Cmd+Shift+Ctrl+4`）：剪贴板里的 TIFF 会自动转成 PNG 再发送——**不会再出现“图片发不出去”**；
   - 网页复制 / 微信等工具截取的图片同样支持（统一转码为模型可识别的 PNG/JPEG）。
 - **Markdown / GitHub 风格渲染**：表格、代码高亮、任务列表等。
+- **回答内图片渲染**：模型用 Markdown 图片语法给出的图片（`![描述](https://…)`）会直接下载并显示在气泡里；可在「设置 → 外观」关闭（关闭后只显示一个可手动打开的提示条），导出 PDF 时同样会把图片带进去。
 - **LaTeX 数学公式**：`$...$` / `$$...$$` 原生排版（SwiftMath + 随包数学字体）。
 - **流式回复**：打字机式输出，可随时停止。
 - **会话管理**：多会话侧边栏、全文搜索、消息复制 / 重试 / 删除 / 导出。
@@ -41,8 +42,8 @@ macOS 原生 AI 聊天桌面应用：支持 OpenAI Chat Completions 兼容接口
 
 | 文件 | 适用 |
 | --- | --- |
-| `AIChatApp-1.3.7-arm64.dmg` | Apple Silicon Mac（M1/M2/M3/M4/M5…） |
-| `AIChatApp-1.3.7-x86_64.dmg` | Intel Mac |
+| `AIChatApp-1.3.8-arm64.dmg` | Apple Silicon Mac（M1/M2/M3/M4/M5…） |
+| `AIChatApp-1.3.8-x86_64.dmg` | Intel Mac |
 
 双击挂载后把 `AIChatApp.app` 拖进「应用程序」即可。
 
@@ -63,7 +64,7 @@ SWIFT_SCRATCH=.build-x86 ARCH=x86_64 ./build_arm64.sh
 
 产物：
 - `.stage/AIChatApp.app` —— 可直接运行的 .app
-- `dist/AIChatApp-1.3.7-<arch>.dmg` —— 安装包
+- `dist/AIChatApp-1.3.8-<arch>.dmg` —— 安装包
 
 > 注：构建脚本会优先使用 `~/aichat-sdk/MacOSX.sdk`（仅当系统 SDK 缺失 `CarbonCore/MacErrors.h` 的少数环境需要该修复层）；正常的 macOS 上会自动回退系统 SDK，无需任何额外操作。
 

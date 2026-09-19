@@ -18,7 +18,7 @@
 set -euo pipefail
 
 APP_NAME="AIChatApp"
-VERSION="${VERSION:-1.3.7}"
+VERSION="${VERSION:-1.3.8}"
 ARCH="${ARCH:-arm64}"
 BUILD_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SDK_OVERLAY="$HOME/aichat-sdk/MacOSX.sdk"

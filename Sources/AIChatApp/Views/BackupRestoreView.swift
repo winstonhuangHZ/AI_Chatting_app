@@ -128,7 +128,8 @@ struct BackupRestoreView: View {
         let backupAppearance = BackupAppearance(
             fontPreset: appearance.fontPreset.rawValue,
             fontSizeLevel: appearance.fontSizeLevel.rawValue,
-            theme: appearance.theme.rawValue
+            theme: appearance.theme.rawValue,
+            rendersRemoteImages: appearance.rendersRemoteImages
         )
         let language = localization.current.rawValue
         let displayName = userProfileStore.displayName

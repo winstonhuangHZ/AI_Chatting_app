@@ -751,6 +751,20 @@ private struct ProfileEditView: View {
                           systemImage: "text.alignleft")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+
+                    // 应用会在发送前临时追加自己的说明（记忆协议 / 时间 / 图片等），
+                    // 但不会写回上面这份文本。展开即看到模型真正收到的那一份。
+                    DisclosureGroup(L("system.prompt.preview")) {
+                        ScrollView {
+                            Text(ChatViewModel.effectiveSystemPrompt(for: draft))
+                                .font(.system(.caption2, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 4)
+                        }
+                        .frame(maxHeight: 200)
+                    }
+                    .font(.caption)
                 } header: {
                     Text(L("system.prompt"))
                 } footer: {

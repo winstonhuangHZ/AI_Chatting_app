@@ -38,7 +38,7 @@ enum PDFExportService {
         session: ChatSession,
         appearance: AppearanceStore,
         localization: LocalizationManager
-    ) throws -> URL? {
+    ) async throws -> URL? {
         let panel = NSSavePanel()
         panel.title = L("export.pdf")
         panel.prompt = L("export.pdf")
@@ -48,7 +48,7 @@ enum PDFExportService {
 
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
 
-        let data = try pdfData(
+        let data = try await pdfData(
             session: session,
             appearance: appearance,
             localization: localization
@@ -73,7 +73,18 @@ enum PDFExportService {
         session: ChatSession,
         appearance: AppearanceStore,
         localization: LocalizationManager
-    ) throws -> Data {
+    ) async throws -> Data {
+        // 远端图片是异步下载的，而下面每一步都是同步快照（ImageRenderer 不会等
+        // 网络），所以先把会话里出现的图片灌进缓存——否则导出的 PDF 只会留下
+        // 占位框。用户在设置里关掉网络图片时同样跳过，导出的就是「图片已隐藏」
+        // 提示条，与屏幕上的效果一致。
+        if appearance.rendersRemoteImages {
+            let urls = session.messages.flatMap {
+                RemoteImageLoader.markdownImageURLs(in: $0.content)
+            }
+            await RemoteImageLoader.shared.preload(urls)
+        }
+
         let contentWidth = pageSize.width - margin * 2
         let usableHeight = pageSize.height - margin * 2
 
@@ -215,4 +226,3 @@ enum PDFExportService {
         }
     }
 }
-

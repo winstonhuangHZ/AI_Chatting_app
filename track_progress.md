@@ -136,3 +136,20 @@
 - [x] **`Views/MarkdownText.swift`**：`.markdownCodeSyntaxHighlighter(ThemeCodeSyntaxHighlighter())` 注册；代码块卡片升级为 语言标签栏 + 复制按钮 + 横向滚动（`CodeBlockConfiguration.content` 取源码）
 - [x] tokenizer 逻辑独立脚本验证 12 项断言（字符串/转义/注释/块注释/数字/`#include` 排除）全部通过；构建 + 打包 + 启动冒烟通过
 
+---
+
+## 附加：模型回答里的网络图片渲染（Markdown `![描述](https://…)`）
+
+背景：此前两个自定义图片 provider（`MathImageProvider`）只认 `aichatmath://` 公式
+URL，模型写出的普通图片链接会被静默丢弃（block 返回 `EmptyView`，inline 返回零尺寸图）。
+
+- [x] **`Services/RemoteImageLoader.swift`**（新建）：网络图片下载 / 解码 / 缓存中心——内存 `NSCache` + URLSession 磁盘缓存、并发请求去重、失败 30s 冷却（坏链接不会每次重渲染都重发）、20s/60s 超时、单张 24MB 上限、`Content-Length` 预检；只接受 `http(s)://` 与 `data:image/…`（相对路径、`file://` 一律拒绝）；`markdownImageURLs(in:)` 扫描图片语法供 PDF 导出预加载
+- [x] **`Views/RemoteImageView.swift`**（新建）：块级图片视图——加载占位框 / 成功（按原图比例、不放大、最高 420pt、点击用浏览器打开原图）/ 失败（`RemoteImageNotice` 提示条 + 重试 + 打开）；`load()` / `retry()` 标 `@MainActor`，保证异步回来后状态更新一定触发重绘
+- [x] **`Views/Math/MediaImageProvider.swift`**（由 `MathImageProvider.swift` 改名）：两个 provider 升级为「数学公式 + 网络图片」分发器；行内图片（协议要求返回 `Image`，放不下占位框与按钮）等比缩到 ≤4em，加载失败或功能关闭时退回 `photo` 图标
+- [x] **`Services/AppearanceStore.swift`**：新增 `rendersRemoteImages`（UserDefaults `appearance.rendersRemoteImages`，默认开启），并计入 `renderIdentity`——否则已渲染的气泡不会因开关变化而刷新；`BackupAppearance.rendersRemoteImages` 随备份导出/恢复
+- [x] **`Views/AppearancePickerView.swift`**：设置 → 外观新增开关 + 说明（图片请求直连图床、会暴露 IP）
+- [x] **`ViewModels/ChatViewModel.swift`**：system prompt 渐进增强补 `IMAGE URLS:` 说明（可用 `![描述](https://…)` 单独一行给图；禁止编造 URL、禁止放进代码块）
+- [x] **`Services/PDFExportService.swift` + `Views/SidebarView.swift`**：导出改为 async，先 `RemoteImageLoader.preload` 再逐块渲染，PDF 里也能带图（关闭开关时导出「图片已隐藏」提示条，与屏幕一致）
+- [x] **`Localization/AppLanguage.swift`**：`appearance.images.render` / `appearance.images.hint` / `image.loading` / `image.failed` / `image.hidden` / `image.open` / `image.retry` 七项六语言翻译
+- [x] **`ViewModels/ChatViewModel.swift` + `Views/SettingsView.swift`**：`buildSystemPrompt` 改为 `static effectiveSystemPrompt(for:)`，配置界面「系统提示」下新增可展开的「查看实际发送的完整提示词」——解释清楚「应用自动追加的说明只按请求拼接、不写回 profile」，顺带让用户能直接核对时间/图片/记忆协议是否生效（附六语言文案 `system.prompt.preview`）
+- [x] 验证：临时 SwiftUI 验证程序（`/private/tmp`，不写入仓库）直接编译 App 真实源码，7/7 通过——公网 https 图片（picsum，含重定向）、`data:image/png;base64` 内联图、坏链接提示条（高度 68pt ≠ 占位框 130pt）、关闭开关提示条、行内图片（非白像素 1656）、LaTeX 回归、预加载后 `ImageRenderer` 快照真实画出图片像素；`swift build` debug + release 均无新增警告
